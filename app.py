@@ -190,7 +190,7 @@ def create_multipart_body(
     body.extend(
         (
             f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="text"\r\n"
+            f'Content-Disposition: form-data; name="text"\r\n'
             f"\r\n"
         ).encode("utf-8")
     )
