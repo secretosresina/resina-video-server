@@ -1,3 +1,4 @@
+```python
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -16,8 +17,6 @@ app = FastAPI()
 VIDEO_DIR = "/tmp/videos"
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
-jobs = {}
-
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 
@@ -25,8 +24,67 @@ class VideoRequest(BaseModel):
     tiktok_url: str
 
 
+# ============================================================
+# UTILIDADES DE ESTADO
+# ============================================================
+
+def job_state_path(job_id):
+    return os.path.join(
+        VIDEO_DIR,
+        f"{job_id}.json"
+    )
+
+
+def save_job_state(job_id, data):
+
+    path = job_state_path(job_id)
+
+    temp_path = path + ".tmp"
+
+    with open(
+        temp_path,
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(
+            data,
+            f,
+            ensure_ascii=False
+        )
+
+    os.replace(
+        temp_path,
+        path
+    )
+
+
+def load_job_state(job_id):
+
+    path = job_state_path(job_id)
+
+    if not os.path.isfile(path):
+        return None
+
+    try:
+
+        with open(
+            path,
+            "r",
+            encoding="utf-8"
+        ) as f:
+            return json.load(f)
+
+    except Exception:
+        return None
+
+
+# ============================================================
+# HOME / TEST
+# ============================================================
+
 @app.get("/")
 def home():
+
     return {
         "status": "online",
         "message": "Servidor de procesamiento de videos funcionando"
@@ -35,6 +93,7 @@ def home():
 
 @app.get("/test")
 def test():
+
     return {
         "success": True,
         "message": "Render está conectado correctamente"
@@ -43,7 +102,9 @@ def test():
 
 @app.get("/test_ffmpeg")
 def test_ffmpeg():
+
     try:
+
         result = subprocess.run(
             ["ffmpeg", "-version"],
             capture_output=True,
@@ -63,16 +124,24 @@ def test_ffmpeg():
         }
 
     except Exception as e:
+
         return {
             "success": False,
             "error": str(e)
         }
 
 
+# ============================================================
+# DESCARGAR VIDEO DE TIKTOK
+# ============================================================
+
 @app.post("/download_video")
 def download_video(data: VideoRequest):
 
-    if not data.tiktok_url.startswith(("http://", "https://")):
+    if not data.tiktok_url.startswith(
+        ("http://", "https://")
+    ):
+
         raise HTTPException(
             status_code=400,
             detail="URL no válida"
@@ -102,29 +171,40 @@ def download_video(data: VideoRequest):
         )
 
         if result.returncode != 0:
+
             return {
                 "success": False,
                 "error": result.stderr[-3000:]
             }
 
         files = glob.glob(
-            os.path.join(VIDEO_DIR, f"{job_id}.*")
+            os.path.join(
+                VIDEO_DIR,
+                f"{job_id}.*"
+            )
         )
 
         if not files:
+
             return {
                 "success": False,
-                "error": "El video no fue encontrado después de la descarga"
+                "error": (
+                    "El video no fue encontrado "
+                    "después de la descarga"
+                )
             }
 
-        filename = os.path.basename(files[0])
+        filename = os.path.basename(
+            files[0]
+        )
 
         return {
             "success": True,
             "job_id": job_id,
             "filename": filename,
             "download_url": (
-                f"https://resina-video-server.onrender.com/video/{filename}"
+                "https://resina-video-server.onrender.com"
+                f"/video/{filename}"
             )
         }
 
@@ -143,12 +223,20 @@ def download_video(data: VideoRequest):
         }
 
 
+# ============================================================
+# SERVIR VIDEOS
+# ============================================================
+
 @app.get("/video/{filename}")
 def get_video(filename: str):
 
-    filepath = os.path.join(VIDEO_DIR, filename)
+    filepath = os.path.join(
+        VIDEO_DIR,
+        filename
+    )
 
     if not os.path.isfile(filepath):
+
         raise HTTPException(
             status_code=404,
             detail="Video no encontrado"
@@ -160,6 +248,10 @@ def get_video(filename: str):
         filename=filename
     )
 
+
+# ============================================================
+# MULTIPART PARA ELEVENLABS
+# ============================================================
 
 def create_multipart_body(
     file_data,
@@ -195,25 +287,42 @@ def create_multipart_body(
         ).encode("utf-8")
     )
 
-    body.extend(text.encode("utf-8"))
+    body.extend(
+        text.encode("utf-8")
+    )
+
     body.extend(b"\r\n")
 
     body.extend(
-        f"--{boundary}--\r\n".encode("utf-8")
+        f"--{boundary}--\r\n".encode(
+            "utf-8"
+        )
     )
 
     return bytes(body), boundary
 
 
-def get_forced_alignment(audio_path, text):
+# ============================================================
+# ELEVENLABS FORCED ALIGNMENT
+# ============================================================
+
+def get_forced_alignment(
+    audio_path,
+    text
+):
 
     if not ELEVENLABS_API_KEY:
+
         raise Exception(
-            "Falta ELEVENLABS_API_KEY en las variables "
-            "de entorno de Render"
+            "Falta ELEVENLABS_API_KEY "
+            "en Render"
         )
 
-    with open(audio_path, "rb") as f:
+    with open(
+        audio_path,
+        "rb"
+    ) as f:
+
         audio_data = f.read()
 
     body, boundary = create_multipart_body(
@@ -222,7 +331,9 @@ def get_forced_alignment(audio_path, text):
         text
     )
 
-    url = "https://api.elevenlabs.io/v1/forced-alignment"
+    url = (
+        "https://api.elevenlabs.io/v1/forced-alignment"
+    )
 
     request = urllib.request.Request(
         url,
@@ -266,27 +377,35 @@ def get_forced_alignment(audio_path, text):
         )
 
         raise Exception(
-            "ElevenLabs Forced Alignment error "
-            f"{e.code}: {error_body[-3000:]}"
+            "ElevenLabs Forced Alignment "
+            f"error {e.code}: "
+            f"{error_body[-3000:]}"
         )
 
     except Exception as e:
 
         raise Exception(
-            f"No se pudo obtener la sincronización "
-            f"de ElevenLabs: {str(e)}"
+            "No se pudo obtener la "
+            f"sincronización de ElevenLabs: {e}"
         )
 
+
+# ============================================================
+# TIEMPOS SRT
+# ============================================================
 
 def format_srt_time(seconds):
 
     milliseconds = int(
-        round((seconds % 1) * 1000)
+        round(
+            (seconds % 1) * 1000
+        )
     )
 
     total_seconds = int(seconds)
 
     if milliseconds >= 1000:
+
         milliseconds = 0
         total_seconds += 1
 
@@ -306,17 +425,25 @@ def format_srt_time(seconds):
     )
 
 
+# ============================================================
+# CREAR SUBTÍTULOS SINCRONIZADOS
+# ============================================================
+
 def create_srt_from_alignment(
     alignment,
     srt_path
 ):
 
-    words = alignment.get("words", [])
+    words = alignment.get(
+        "words",
+        []
+    )
 
     if not words:
+
         raise Exception(
-            "ElevenLabs no devolvió palabras "
-            "para sincronizar"
+            "ElevenLabs no devolvió "
+            "palabras para sincronizar"
         )
 
     subtitles = []
@@ -333,18 +460,27 @@ def create_srt_from_alignment(
     for word_data in words:
 
         word = str(
-            word_data.get("text", "")
+            word_data.get(
+                "text",
+                ""
+            )
         ).strip()
 
         if not word:
             continue
 
         start = float(
-            word_data.get("start", 0)
+            word_data.get(
+                "start",
+                0
+            )
         )
 
         end = float(
-            word_data.get("end", start)
+            word_data.get(
+                "end",
+                start
+            )
         )
 
         projected_chars = (
@@ -359,14 +495,19 @@ def create_srt_from_alignment(
 
         large_pause = (
             previous_end is not None
-            and start - previous_end >= 0.45
+            and (
+                start - previous_end
+                >= 0.45
+            )
         )
 
         should_break = (
             current_words
             and (
-                len(current_words) >= MAX_WORDS
-                or projected_chars > MAX_CHARS
+                len(current_words)
+                >= MAX_WORDS
+                or projected_chars
+                > MAX_CHARS
                 or large_pause
             )
         )
@@ -377,7 +518,9 @@ def create_srt_from_alignment(
                 (
                     current_start,
                     current_end,
-                    " ".join(current_words)
+                    " ".join(
+                        current_words
+                    )
                 )
             )
 
@@ -387,9 +530,13 @@ def create_srt_from_alignment(
             current_chars = 0
 
         if current_start is None:
+
             current_start = start
 
-        current_words.append(word)
+        current_words.append(
+            word
+        )
+
         current_end = end
 
         current_chars = (
@@ -410,7 +557,9 @@ def create_srt_from_alignment(
             (
                 current_start,
                 current_end,
-                " ".join(current_words)
+                " ".join(
+                    current_words
+                )
             )
         )
 
@@ -443,7 +592,13 @@ def create_srt_from_alignment(
             )
 
 
-def get_audio_duration(audio_path):
+# ============================================================
+# DURACIÓN DE AUDIO
+# ============================================================
+
+def get_audio_duration(
+    audio_path
+):
 
     result = subprocess.run(
         [
@@ -462,8 +617,10 @@ def get_audio_duration(audio_path):
     )
 
     if result.returncode != 0:
+
         raise Exception(
-            "No se pudo obtener la duración del audio: "
+            "No se pudo obtener la duración "
+            "del audio: "
             + result.stderr[-2000:]
         )
 
@@ -472,7 +629,13 @@ def get_audio_duration(audio_path):
     )
 
 
-def get_video_duration(video_path):
+# ============================================================
+# DURACIÓN DE VIDEO
+# ============================================================
+
+def get_video_duration(
+    video_path
+):
 
     result = subprocess.run(
         [
@@ -491,8 +654,10 @@ def get_video_duration(video_path):
     )
 
     if result.returncode != 0:
+
         raise Exception(
-            "No se pudo obtener la duración del video: "
+            "No se pudo obtener la duración "
+            "del video: "
             + result.stderr[-2000:]
         )
 
@@ -500,6 +665,10 @@ def get_video_duration(video_path):
         result.stdout.strip()
     )
 
+
+# ============================================================
+# PROCESAMIENTO EN SEGUNDO PLANO
+# ============================================================
 
 def process_video_background(
     job_id,
@@ -510,22 +679,31 @@ def process_video_background(
     subtitle_text
 ):
 
+    state = load_job_state(
+        job_id
+    ) or {}
+
     try:
 
-        jobs[job_id]["status"] = "processing"
+        state["status"] = "processing"
 
-        # --------------------------------------------------
-        # 1. Sincronización real de ElevenLabs
-        # --------------------------------------------------
+        save_job_state(
+            job_id,
+            state
+        )
+
+        # ----------------------------------------------------
+        # 1. Obtener sincronización real
+        # ----------------------------------------------------
 
         alignment = get_forced_alignment(
             voice_path,
             subtitle_text
         )
 
-        # --------------------------------------------------
-        # 2. Crear SRT sincronizado
-        # --------------------------------------------------
+        # ----------------------------------------------------
+        # 2. Crear SRT
+        # ----------------------------------------------------
 
         srt_path = os.path.join(
             VIDEO_DIR,
@@ -537,9 +715,9 @@ def process_video_background(
             srt_path
         )
 
-        # --------------------------------------------------
-        # 3. Obtener duración real de voz y video
-        # --------------------------------------------------
+        # ----------------------------------------------------
+        # 3. Duraciones
+        # ----------------------------------------------------
 
         voice_duration = get_audio_duration(
             voice_path
@@ -549,43 +727,22 @@ def process_video_background(
             input_path
         )
 
-        jobs[job_id]["voice_duration"] = voice_duration
-        jobs[job_id]["video_duration"] = video_duration
+        state["voice_duration"] = (
+            voice_duration
+        )
 
-        # --------------------------------------------------
-        # 4. Preparar el video para cubrir toda la voz
-        #
-        # Si el video es más corto:
-        #     se repite automáticamente.
-        #
-        # Si el video es más largo:
-        #     se recorta al final de la voz.
-        # --------------------------------------------------
+        state["video_duration"] = (
+            video_duration
+        )
 
-        if video_duration < voice_duration:
+        save_job_state(
+            job_id,
+            state
+        )
 
-            video_input = (
-                "[0:v]"
-                "setpts=PTS-STARTPTS,"
-                "loop=loop=-1:size=32767:start=0"
-                "[looped]"
-            )
-
-            video_source = "[looped]"
-
-        else:
-
-            video_input = (
-                "[0:v]"
-                "setpts=PTS-STARTPTS"
-                "[looped]"
-            )
-
-            video_source = "[looped]"
-
-        # --------------------------------------------------
-        # 5. Filtro de subtítulos
-        # --------------------------------------------------
+        # ----------------------------------------------------
+        # 4. Ruta del SRT para FFmpeg
+        # ----------------------------------------------------
 
         subtitle_filter_path = (
             srt_path
@@ -594,43 +751,61 @@ def process_video_background(
             .replace("'", "\\'")
         )
 
+        # ----------------------------------------------------
+        # 5. FFmpeg
+        #
+        # -stream_loop -1 hace que el video se repita
+        # automáticamente.
+        #
+        # -t limita el resultado a la duración de la voz.
+        #
+        # Por tanto:
+        #
+        # video 8s + voz 15s = resultado 15s
+        # video 30s + voz 15s = resultado 15s
+        # ----------------------------------------------------
+
         filter_complex = (
-            video_input
-            + ";"
-            + "[1:a]volume=1.0[voice];"
-            + "[2:a]volume=0.20[bg];"
-            + "[voice][bg]"
-            + "amix=inputs=2:"
-            + "duration=first:"
-            + "dropout_transition=2"
-            + "[audio];"
-            + video_source
-            + "subtitles='"
+            "[1:a]"
+            "volume=1.0"
+            "[voice];"
+
+            "[2:a]"
+            "volume=0.20"
+            "[bg];"
+
+            "[voice][bg]"
+            "amix=inputs=2:"
+            "duration=first:"
+            "dropout_transition=2"
+            "[audio];"
+
+            "[0:v]"
+            "subtitles='"
             + subtitle_filter_path
             + "':"
-            + "force_style="
-            + "'FontName=Arial,"
-            + "FontSize=18,"
-            + "PrimaryColour=&H00FFFFFF,"
-            + "OutlineColour=&H00000000,"
-            + "BorderStyle=1,"
-            + "Outline=3,"
-            + "Shadow=1,"
-            + "Alignment=2,"
-            + "MarginV=60'"
-            + "[video]"
+            "force_style="
+            "'FontName=Arial,"
+            "FontSize=18,"
+            "PrimaryColour=&H00FFFFFF,"
+            "OutlineColour=&H00000000,"
+            "BorderStyle=1,"
+            "Outline=3,"
+            "Shadow=1,"
+            "Alignment=2,"
+            "MarginV=60'"
+            "[video]"
         )
-
-        # --------------------------------------------------
-        # 6. FFmpeg
-        # --------------------------------------------------
 
         result = subprocess.run(
             [
                 "ffmpeg",
                 "-y",
 
-                # Video original
+                # Video
+                "-stream_loop",
+                "-1",
+
                 "-i",
                 input_path,
 
@@ -641,6 +816,7 @@ def process_video_background(
                 # Música
                 "-stream_loop",
                 "-1",
+
                 "-i",
                 background_path,
 
@@ -673,7 +849,7 @@ def process_video_background(
                 "-b:a",
                 "128k",
 
-                # Duración final = duración de la voz
+                # Duración = voz
                 "-t",
                 str(voice_duration),
 
@@ -689,11 +865,17 @@ def process_video_background(
 
         if result.returncode != 0:
 
-            jobs[job_id]["status"] = "error"
-
-            jobs[job_id]["error"] = (
+            error_message = (
                 "FFmpeg error:\n"
                 + result.stderr[-5000:]
+            )
+
+            state["status"] = "error"
+            state["error"] = error_message
+
+            save_job_state(
+                job_id,
+                state
             )
 
             return
@@ -702,47 +884,72 @@ def process_video_background(
             output_path
         ):
 
-            jobs[job_id]["status"] = "error"
+            state["status"] = "error"
+            state["error"] = (
+                "FFmpeg no generó "
+                "el video"
+            )
 
-            jobs[job_id]["error"] = (
-                "FFmpeg no generó el video"
+            save_job_state(
+                job_id,
+                state
             )
 
             return
 
-        # --------------------------------------------------
-        # 7. Resultado
-        # --------------------------------------------------
+        # ----------------------------------------------------
+        # 6. Completado
+        # ----------------------------------------------------
 
         filename = os.path.basename(
             output_path
         )
 
-        jobs[job_id]["status"] = "completed"
+        state["status"] = "completed"
 
-        jobs[job_id]["filename"] = filename
+        state["filename"] = filename
 
-        jobs[job_id]["download_url"] = (
+        state["download_url"] = (
             "https://resina-video-server.onrender.com"
             f"/video/{filename}"
         )
 
-        jobs[job_id]["alignment"] = True
+        state["alignment"] = True
+
+        save_job_state(
+            job_id,
+            state
+        )
 
     except subprocess.TimeoutExpired:
 
-        jobs[job_id]["status"] = "error"
+        state["status"] = "error"
 
-        jobs[job_id]["error"] = (
-            "FFmpeg superó los 300 segundos"
+        state["error"] = (
+            "FFmpeg superó "
+            "los 300 segundos"
+        )
+
+        save_job_state(
+            job_id,
+            state
         )
 
     except Exception as e:
 
-        jobs[job_id]["status"] = "error"
+        state["status"] = "error"
 
-        jobs[job_id]["error"] = str(e)
+        state["error"] = str(e)
 
+        save_job_state(
+            job_id,
+            state
+        )
+
+
+# ============================================================
+# PROCESS VIDEO
+# ============================================================
 
 @app.post("/process_video")
 async def process_video(
@@ -752,7 +959,9 @@ async def process_video(
     text: str = Form(...)
 ):
 
-    job_id = str(uuid.uuid4())
+    job_id = str(
+        uuid.uuid4()
+    )
 
     input_path = os.path.join(
         VIDEO_DIR,
@@ -776,9 +985,9 @@ async def process_video(
 
     try:
 
-        # --------------------------------------------------
+        # ----------------------------------------------------
         # Guardar video
-        # --------------------------------------------------
+        # ----------------------------------------------------
 
         with open(
             input_path,
@@ -796,9 +1005,9 @@ async def process_video(
 
                 f.write(chunk)
 
-        # --------------------------------------------------
+        # ----------------------------------------------------
         # Guardar voz
-        # --------------------------------------------------
+        # ----------------------------------------------------
 
         with open(
             voice_path,
@@ -816,9 +1025,9 @@ async def process_video(
 
                 f.write(chunk)
 
-        # --------------------------------------------------
+        # ----------------------------------------------------
         # Descargar música
-        # --------------------------------------------------
+        # ----------------------------------------------------
 
         urllib.request.urlretrieve(
             background,
@@ -828,31 +1037,42 @@ async def process_video(
         if not os.path.isfile(
             background_path
         ):
+
             raise Exception(
                 "No se pudo descargar "
                 "el sonido de fondo"
             )
 
         if not text.strip():
+
             raise Exception(
-                "El texto de subtítulos está vacío"
+                "El texto de subtítulos "
+                "está vacío"
             )
 
         if not os.path.isfile(
             voice_path
         ):
+
             raise Exception(
                 "No se pudo guardar "
                 "el audio de ElevenLabs"
             )
 
-        jobs[job_id] = {
-            "status": "queued"
-        }
+        # ----------------------------------------------------
+        # Crear estado persistente
+        # ----------------------------------------------------
 
-        # --------------------------------------------------
-        # Procesamiento en segundo plano
-        # --------------------------------------------------
+        save_job_state(
+            job_id,
+            {
+                "status": "queued"
+            }
+        )
+
+        # ----------------------------------------------------
+        # Lanzar procesamiento
+        # ----------------------------------------------------
 
         thread = threading.Thread(
             target=process_video_background,
@@ -877,10 +1097,13 @@ async def process_video(
 
     except Exception as e:
 
-        jobs[job_id] = {
-            "status": "error",
-            "error": str(e)
-        }
+        save_job_state(
+            job_id,
+            {
+                "status": "error",
+                "error": str(e)
+            }
+        )
 
         return {
             "success": False,
@@ -890,20 +1113,129 @@ async def process_video(
         }
 
 
+# ============================================================
+# STATUS
+# ============================================================
+
 @app.get("/status/{job_id}")
-def get_status(job_id: str):
+def get_status(
+    job_id: str
+):
 
-    if job_id not in jobs:
+    output_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_processed.mp4"
+    )
 
-        raise HTTPException(
-            status_code=404,
-            detail="Job no encontrado"
+    input_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_input.mp4"
+    )
+
+    voice_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_voice.mp3"
+    )
+
+    background_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_background.mp3"
+    )
+
+    # --------------------------------------------------------
+    # Primero mirar si existe estado guardado
+    # --------------------------------------------------------
+
+    state = load_job_state(
+        job_id
+    )
+
+    # --------------------------------------------------------
+    # Si el video final existe, siempre está completado.
+    # Esto permite recuperar el estado incluso después
+    # de un reinicio del proceso.
+    # --------------------------------------------------------
+
+    if os.path.isfile(
+        output_path
+    ):
+
+        filename = os.path.basename(
+            output_path
         )
 
-    job = jobs[job_id]
+        recovered_state = {
+            "status": "completed",
+            "filename": filename,
+            "download_url": (
+                "https://resina-video-server.onrender.com"
+                f"/video/{filename}"
+            )
+        }
 
-    return {
-        "success": True,
-        "job_id": job_id,
-        **job
-    }
+        if state:
+
+            for key in [
+                "voice_duration",
+                "video_duration",
+                "alignment"
+            ]:
+
+                if key in state:
+
+                    recovered_state[key] = (
+                        state[key]
+                    )
+
+        return {
+            "success": True,
+            "job_id": job_id,
+            **recovered_state
+        }
+
+    # --------------------------------------------------------
+    # Si existen los archivos de entrada, el trabajo existe
+    # aunque el diccionario de memoria se haya perdido.
+    # --------------------------------------------------------
+
+    if (
+        os.path.isfile(input_path)
+        and os.path.isfile(voice_path)
+        and os.path.isfile(background_path)
+    ):
+
+        if state:
+
+            return {
+                "success": True,
+                "job_id": job_id,
+                **state
+            }
+
+        return {
+            "success": True,
+            "job_id": job_id,
+            "status": "processing"
+        }
+
+    # --------------------------------------------------------
+    # Si tenemos estado guardado, devolverlo
+    # --------------------------------------------------------
+
+    if state:
+
+        return {
+            "success": True,
+            "job_id": job_id,
+            **state
+        }
+
+    # --------------------------------------------------------
+    # No existe absolutamente nada relacionado con ese job
+    # --------------------------------------------------------
+
+    raise HTTPException(
+        status_code=404,
+        detail="Job no encontrado"
+    )
+```
