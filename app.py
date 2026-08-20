@@ -1,3 +1,4 @@
+```python
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -190,7 +191,7 @@ def create_multipart_body(
     body.extend(
         (
             f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="text"\r\n'
+            f'Content-Disposition: form-data; name="text"\r\n"
             f"\r\n"
         ).encode("utf-8")
     )
@@ -208,7 +209,6 @@ def create_multipart_body(
 def get_forced_alignment(audio_path, text):
 
     if not ELEVENLABS_API_KEY:
-
         raise Exception(
             "Falta ELEVENLABS_API_KEY en las variables "
             "de entorno de Render"
@@ -287,7 +287,6 @@ def format_srt_time(seconds):
 
     total_seconds = int(seconds)
 
-    # Corregir el caso en que el redondeo llegue a 1000 ms
     if milliseconds >= 1000:
         milliseconds = 0
         total_seconds += 1
@@ -327,6 +326,7 @@ def create_srt_from_alignment(
     current_start = None
     current_end = None
     current_chars = 0
+    previous_end = None
 
     MAX_WORDS = 7
     MAX_CHARS = 42
@@ -358,13 +358,17 @@ def create_srt_from_alignment(
             )
         )
 
+        large_pause = (
+            previous_end is not None
+            and start - previous_end >= 0.45
+        )
+
         should_break = (
             current_words
             and (
-                len(current_words)
-                >= MAX_WORDS
-                or projected_chars
-                > MAX_CHARS
+                len(current_words) >= MAX_WORDS
+                or projected_chars > MAX_CHARS
+                or large_pause
             )
         )
 
@@ -399,12 +403,7 @@ def create_srt_from_alignment(
             )
         )
 
-        # Si hay una pausa relativamente grande,
-        # terminamos el subtítulo aquí.
-        #
-        # La pausa se determina en la siguiente palabra.
-        #
-        # Esto mantiene los subtítulos naturales.
+        previous_end = end
 
     if current_words:
 
@@ -445,6 +444,64 @@ def create_srt_from_alignment(
             )
 
 
+def get_audio_duration(audio_path):
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            audio_path
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30
+    )
+
+    if result.returncode != 0:
+        raise Exception(
+            "No se pudo obtener la duración del audio: "
+            + result.stderr[-2000:]
+        )
+
+    return float(
+        result.stdout.strip()
+    )
+
+
+def get_video_duration(video_path):
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            video_path
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30
+    )
+
+    if result.returncode != 0:
+        raise Exception(
+            "No se pudo obtener la duración del video: "
+            + result.stderr[-2000:]
+        )
+
+    return float(
+        result.stdout.strip()
+    )
+
+
 def process_video_background(
     job_id,
     input_path,
@@ -459,7 +516,7 @@ def process_video_background(
         jobs[job_id]["status"] = "processing"
 
         # --------------------------------------------------
-        # 1. Obtener sincronización real de la voz
+        # 1. Sincronización real de ElevenLabs
         # --------------------------------------------------
 
         alignment = get_forced_alignment(
@@ -468,7 +525,7 @@ def process_video_background(
         )
 
         # --------------------------------------------------
-        # 2. Crear subtítulos sincronizados
+        # 2. Crear SRT sincronizado
         # --------------------------------------------------
 
         srt_path = os.path.join(
@@ -482,7 +539,53 @@ def process_video_background(
         )
 
         # --------------------------------------------------
-        # 3. Procesar video + voz + música + subtítulos
+        # 3. Obtener duración real de voz y video
+        # --------------------------------------------------
+
+        voice_duration = get_audio_duration(
+            voice_path
+        )
+
+        video_duration = get_video_duration(
+            input_path
+        )
+
+        jobs[job_id]["voice_duration"] = voice_duration
+        jobs[job_id]["video_duration"] = video_duration
+
+        # --------------------------------------------------
+        # 4. Preparar el video para cubrir toda la voz
+        #
+        # Si el video es más corto:
+        #     se repite automáticamente.
+        #
+        # Si el video es más largo:
+        #     se recorta al final de la voz.
+        # --------------------------------------------------
+
+        if video_duration < voice_duration:
+
+            video_input = (
+                "[0:v]"
+                "setpts=PTS-STARTPTS,"
+                "loop=loop=-1:size=32767:start=0"
+                "[looped]"
+            )
+
+            video_source = "[looped]"
+
+        else:
+
+            video_input = (
+                "[0:v]"
+                "setpts=PTS-STARTPTS"
+                "[looped]"
+            )
+
+            video_source = "[looped]"
+
+        # --------------------------------------------------
+        # 5. Filtro de subtítulos
         # --------------------------------------------------
 
         subtitle_filter_path = (
@@ -493,29 +596,35 @@ def process_video_background(
         )
 
         filter_complex = (
-            "[1:a]volume=1.0[voice];"
-            "[2:a]volume=0.20[bg];"
-            "[voice][bg]"
-            "amix=inputs=2:"
-            "duration=first:"
-            "dropout_transition=2"
-            "[audio];"
-            "[0:v]"
-            "subtitles='"
+            video_input
+            + ";"
+            + "[1:a]volume=1.0[voice];"
+            + "[2:a]volume=0.20[bg];"
+            + "[voice][bg]"
+            + "amix=inputs=2:"
+            + "duration=first:"
+            + "dropout_transition=2"
+            + "[audio];"
+            + video_source
+            + "subtitles='"
             + subtitle_filter_path
             + "':"
-            "force_style="
-            "'FontName=Arial,"
-            "FontSize=18,"
-            "PrimaryColour=&H00FFFFFF,"
-            "OutlineColour=&H00000000,"
-            "BorderStyle=1,"
-            "Outline=3,"
-            "Shadow=1,"
-            "Alignment=2,"
-            "MarginV=60'"
-            "[video]"
+            + "force_style="
+            + "'FontName=Arial,"
+            + "FontSize=18,"
+            + "PrimaryColour=&H00FFFFFF,"
+            + "OutlineColour=&H00000000,"
+            + "BorderStyle=1,"
+            + "Outline=3,"
+            + "Shadow=1,"
+            + "Alignment=2,"
+            + "MarginV=60'"
+            + "[video]"
         )
+
+        # --------------------------------------------------
+        # 6. FFmpeg
+        # --------------------------------------------------
 
         result = subprocess.run(
             [
@@ -526,7 +635,7 @@ def process_video_background(
                 "-i",
                 input_path,
 
-                # Voz ElevenLabs
+                # Voz
                 "-i",
                 voice_path,
 
@@ -565,10 +674,10 @@ def process_video_background(
                 "-b:a",
                 "128k",
 
-                # El video termina con la voz
-                "-shortest",
+                # Duración final = duración de la voz
+                "-t",
+                str(voice_duration),
 
-                # Streaming optimizado
                 "-movflags",
                 "+faststart",
 
@@ -602,6 +711,10 @@ def process_video_background(
 
             return
 
+        # --------------------------------------------------
+        # 7. Resultado
+        # --------------------------------------------------
+
         filename = os.path.basename(
             output_path
         )
@@ -615,7 +728,6 @@ def process_video_background(
             f"/video/{filename}"
         )
 
-        # Guardar información útil
         jobs[job_id]["alignment"] = True
 
     except subprocess.TimeoutExpired:
@@ -686,7 +798,7 @@ async def process_video(
                 f.write(chunk)
 
         # --------------------------------------------------
-        # Guardar voz ElevenLabs
+        # Guardar voz
         # --------------------------------------------------
 
         with open(
@@ -717,14 +829,12 @@ async def process_video(
         if not os.path.isfile(
             background_path
         ):
-
             raise Exception(
                 "No se pudo descargar "
                 "el sonido de fondo"
             )
 
         if not text.strip():
-
             raise Exception(
                 "El texto de subtítulos está vacío"
             )
@@ -732,7 +842,6 @@ async def process_video(
         if not os.path.isfile(
             voice_path
         ):
-
             raise Exception(
                 "No se pudo guardar "
                 "el audio de ElevenLabs"
@@ -799,3 +908,4 @@ def get_status(job_id: str):
         "job_id": job_id,
         **job
     }
+```
