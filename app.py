@@ -907,4 +907,3 @@ def get_status(job_id: str):
         "job_id": job_id,
         **job
     }
-```
