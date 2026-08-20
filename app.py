@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import FileResponse, StreamingResponse, Response
+from fastapi.responses import FileResponse, StreamingResponse, Response, PlainTextResponse
 from pydantic import BaseModel
 import subprocess
 import os
@@ -17,6 +17,39 @@ VIDEO_DIR = "/tmp/videos"
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+
+
+# ============================================================
+# TIKTOK DOMAIN VERIFICATION
+# ============================================================
+
+TIKTOK_VERIFICATION_FILE = (
+    "tiktokMBXNgoJHxI9pXwUdcx90DU4Hgx7rg8RV.txt"
+)
+
+TIKTOK_VERIFICATION_CONTENT = (
+    "tiktok-developers-site-verification="
+    "MBXNgoJHxI9pXwUdcx90DU4Hgx7rg8RV"
+)
+
+
+@app.get(
+    f"/{TIKTOK_VERIFICATION_FILE}",
+    response_class=PlainTextResponse
+)
+def tiktok_verification():
+
+    return TIKTOK_VERIFICATION_CONTENT
+
+
+# También dejamos disponible el nombre estándar por seguridad.
+@app.get(
+    "/tiktok-developers-site-verification.txt",
+    response_class=PlainTextResponse
+)
+def tiktok_verification_standard():
+
+    return TIKTOK_VERIFICATION_CONTENT
 
 
 class VideoRequest(BaseModel):
@@ -44,6 +77,7 @@ def save_job_state(job_id, data):
         "w",
         encoding="utf-8"
     ) as f:
+
         json.dump(
             data,
             f,
@@ -70,9 +104,11 @@ def load_job_state(job_id):
             "r",
             encoding="utf-8"
         ) as f:
+
             return json.load(f)
 
     except Exception:
+
         return None
 
 
@@ -223,23 +259,10 @@ def download_video(data: VideoRequest):
 
 # ============================================================
 # SERVIR VIDEOS
-#
-# IMPORTANTE:
-#
-# Este endpoint ahora:
-#
-# - entrega video/mp4
-# - usa Content-Disposition inline
-# - informa Content-Length
-# - permite Range requests
-# - permite que clientes externos como Meta/Instagram
-#   puedan solicitar solamente una parte del archivo
-# - incluye soporte HEAD
 # ============================================================
 
 def get_video_path(filename):
 
-    # Evitar que filename pueda salir de VIDEO_DIR
     safe_filename = os.path.basename(filename)
 
     filepath = os.path.join(
@@ -295,11 +318,6 @@ def get_video(
 
     range_header = request.headers.get("range")
 
-    # --------------------------------------------------------
-    # Sin Range:
-    # entregar archivo completo
-    # --------------------------------------------------------
-
     if not range_header:
 
         return FileResponse(
@@ -312,13 +330,6 @@ def get_video(
                 "Cache-Control": "public, max-age=3600"
             }
         )
-
-    # --------------------------------------------------------
-    # Range request
-    #
-    # Ejemplo:
-    # Range: bytes=0-999999
-    # --------------------------------------------------------
 
     try:
 
@@ -344,9 +355,6 @@ def get_video(
             start = int(start_str)
 
         else:
-
-            # bytes=-500000
-            # significa los últimos 500000 bytes
 
             suffix_length = int(end_str)
 
@@ -896,18 +904,10 @@ def process_video_background(
             state
         )
 
-        # ----------------------------------------------------
-        # 1. Obtener sincronización real
-        # ----------------------------------------------------
-
         alignment = get_forced_alignment(
             voice_path,
             subtitle_text
         )
-
-        # ----------------------------------------------------
-        # 2. Crear SRT
-        # ----------------------------------------------------
 
         srt_path = os.path.join(
             VIDEO_DIR,
@@ -918,10 +918,6 @@ def process_video_background(
             alignment,
             srt_path
         )
-
-        # ----------------------------------------------------
-        # 3. Duraciones
-        # ----------------------------------------------------
 
         voice_duration = get_audio_duration(
             voice_path
@@ -944,20 +940,12 @@ def process_video_background(
             state
         )
 
-        # ----------------------------------------------------
-        # 4. Ruta del SRT para FFmpeg
-        # ----------------------------------------------------
-
         subtitle_filter_path = (
             srt_path
             .replace("\\", "/")
             .replace(":", "\\:")
             .replace("'", "\\'")
         )
-
-        # ----------------------------------------------------
-        # 5. FFmpeg
-        # ----------------------------------------------------
 
         filter_complex = (
             "[1:a]"
@@ -1082,10 +1070,6 @@ def process_video_background(
 
             return
 
-        # ----------------------------------------------------
-        # 6. Completado
-        # ----------------------------------------------------
-
         filename = os.path.basename(
             output_path
         )
@@ -1170,10 +1154,6 @@ async def process_video(
 
     try:
 
-        # ----------------------------------------------------
-        # Guardar video
-        # ----------------------------------------------------
-
         with open(
             input_path,
             "wb"
@@ -1190,10 +1170,6 @@ async def process_video(
 
                 f.write(chunk)
 
-        # ----------------------------------------------------
-        # Guardar voz
-        # ----------------------------------------------------
-
         with open(
             voice_path,
             "wb"
@@ -1209,10 +1185,6 @@ async def process_video(
                     break
 
                 f.write(chunk)
-
-        # ----------------------------------------------------
-        # Descargar música
-        # ----------------------------------------------------
 
         urllib.request.urlretrieve(
             background,
@@ -1244,20 +1216,12 @@ async def process_video(
                 "el audio de ElevenLabs"
             )
 
-        # ----------------------------------------------------
-        # Crear estado persistente
-        # ----------------------------------------------------
-
         save_job_state(
             job_id,
             {
                 "status": "queued"
             }
         )
-
-        # ----------------------------------------------------
-        # Lanzar procesamiento
-        # ----------------------------------------------------
 
         thread = threading.Thread(
             target=process_video_background,
@@ -1327,17 +1291,9 @@ def get_status(
         f"{job_id}_background.mp3"
     )
 
-    # --------------------------------------------------------
-    # Primero mirar si existe estado guardado
-    # --------------------------------------------------------
-
     state = load_job_state(
         job_id
     )
-
-    # --------------------------------------------------------
-    # Si el video final existe, siempre está completado.
-    # --------------------------------------------------------
 
     if os.path.isfile(
         output_path
@@ -1376,10 +1332,6 @@ def get_status(
             **recovered_state
         }
 
-    # --------------------------------------------------------
-    # Si existen los archivos de entrada, el trabajo existe.
-    # --------------------------------------------------------
-
     if (
         os.path.isfile(input_path)
         and os.path.isfile(voice_path)
@@ -1400,10 +1352,6 @@ def get_status(
             "status": "processing"
         }
 
-    # --------------------------------------------------------
-    # Si tenemos estado guardado, devolverlo.
-    # --------------------------------------------------------
-
     if state:
 
         return {
@@ -1411,10 +1359,6 @@ def get_status(
             "job_id": job_id,
             **state
         }
-
-    # --------------------------------------------------------
-    # No existe absolutamente nada relacionado con ese job.
-    # --------------------------------------------------------
 
     raise HTTPException(
         status_code=404,
