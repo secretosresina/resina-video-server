@@ -108,7 +108,7 @@ def download_video(data: VideoRequest):
             "success": True,
             "job_id": job_id,
             "filename": filename,
-            "download_url": f"/video/{filename}"
+            "download_url": f"https://resina-video-server.onrender.com/video/{filename}"
         }
 
     except subprocess.TimeoutExpired:
