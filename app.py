@@ -7,6 +7,7 @@ import glob
 import uuid
 import threading
 import urllib.request
+import textwrap
 
 app = FastAPI()
 
@@ -117,7 +118,9 @@ def download_video(data: VideoRequest):
             "success": True,
             "job_id": job_id,
             "filename": filename,
-            "download_url": f"https://resina-video-server.onrender.com/video/{filename}"
+            "download_url": (
+                f"https://resina-video-server.onrender.com/video/{filename}"
+            )
         }
 
     except subprocess.TimeoutExpired:
@@ -151,17 +154,124 @@ def get_video(filename: str):
     )
 
 
+def get_video_duration(video_path):
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            video_path
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30
+    )
+
+    if result.returncode != 0:
+        raise Exception("No se pudo obtener la duración del video")
+
+    return float(result.stdout.strip())
+
+
+def create_srt(text, duration, srt_path):
+
+    # Limpiar espacios
+    text = " ".join(text.split())
+
+    if not text:
+        raise Exception("El texto de subtítulos está vacío")
+
+    # Dividir el texto en bloques cortos
+    words = text.split()
+
+    chunks = []
+    current = []
+
+    for word in words:
+
+        current.append(word)
+
+        # Aproximadamente 6-8 palabras por subtítulo
+        if len(current) >= 7:
+            chunks.append(" ".join(current))
+            current = []
+
+    if current:
+        chunks.append(" ".join(current))
+
+    if not chunks:
+        chunks = [text]
+
+    chunk_duration = duration / len(chunks)
+
+    with open(srt_path, "w", encoding="utf-8") as f:
+
+        for index, chunk in enumerate(chunks, start=1):
+
+            start = (index - 1) * chunk_duration
+            end = index * chunk_duration
+
+            # Formato SRT
+            start_time = format_srt_time(start)
+            end_time = format_srt_time(end)
+
+            # Dividir visualmente líneas demasiado largas
+            wrapped = textwrap.fill(
+                chunk,
+                width=38
+            )
+
+            f.write(f"{index}\n")
+            f.write(f"{start_time} --> {end_time}\n")
+            f.write(f"{wrapped}\n\n")
+
+
+def format_srt_time(seconds):
+
+    milliseconds = int((seconds % 1) * 1000)
+    total_seconds = int(seconds)
+
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+
+    return (
+        f"{hours:02d}:"
+        f"{minutes:02d}:"
+        f"{secs:02d},"
+        f"{milliseconds:03d}"
+    )
+
+
 def process_video_background(
     job_id,
     input_path,
     output_path,
     voice_path,
-    background_path
+    background_path,
+    subtitle_text
 ):
 
     try:
 
         jobs[job_id]["status"] = "processing"
+
+        # Obtener duración del video
+        duration = get_video_duration(input_path)
+
+        # Crear archivo SRT
+        srt_path = os.path.join(
+            VIDEO_DIR,
+            f"{job_id}.srt"
+        )
+
+        create_srt(
+            subtitle_text,
+            duration,
+            srt_path
+        )
 
         result = subprocess.run(
             [
@@ -178,15 +288,31 @@ def process_video_background(
                 "-stream_loop", "-1",
                 "-i", background_path,
 
-                # Mezcla de voz + música
+                # Mezclar voz + música
+                # y quemar subtítulos
                 "-filter_complex",
+
                 "[1:a]volume=1.0[voice];"
                 "[2:a]volume=0.20[bg];"
-                "[voice][bg]amix=inputs=2:duration=first:dropout_transition=2[audio]",
+                "[voice][bg]"
+                "amix=inputs=2:duration=first:dropout_transition=2"
+                "[audio];"
+                "[0:v]"
+                "subtitles="
+                + srt_path.replace("\\", "/").replace(":", "\\:")
+                + ":force_style="
+                "'FontName=Arial,"
+                "FontSize=18,"
+                "PrimaryColour=&H00FFFFFF,"
+                "OutlineColour=&H00000000,"
+                "BorderStyle=1,"
+                "Outline=3,"
+                "Shadow=1,"
+                "Alignment=2,"
+                "MarginV=60'"
+                "[video]",
 
-                # Usar solamente el video original
-                # y la nueva mezcla de audio
-                "-map", "0:v",
+                "-map", "[video]",
                 "-map", "[audio]",
 
                 "-c:v", "libx264",
@@ -196,7 +322,6 @@ def process_video_background(
                 "-c:a", "aac",
                 "-b:a", "128k",
 
-                # Terminar cuando termine el video
                 "-shortest",
 
                 "-movflags", "+faststart",
@@ -211,13 +336,15 @@ def process_video_background(
         if result.returncode != 0:
 
             jobs[job_id]["status"] = "error"
-            jobs[job_id]["error"] = result.stderr[-4000:]
+            jobs[job_id]["error"] = result.stderr[-5000:]
             return
 
         if not os.path.isfile(output_path):
 
             jobs[job_id]["status"] = "error"
-            jobs[job_id]["error"] = "FFmpeg no generó el video"
+            jobs[job_id]["error"] = (
+                "FFmpeg no generó el video"
+            )
             return
 
         filename = os.path.basename(output_path)
@@ -231,7 +358,9 @@ def process_video_background(
     except subprocess.TimeoutExpired:
 
         jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"] = "FFmpeg superó los 300 segundos"
+        jobs[job_id]["error"] = (
+            "FFmpeg superó los 300 segundos"
+        )
 
     except Exception as e:
 
@@ -243,7 +372,8 @@ def process_video_background(
 async def process_video(
     video: UploadFile = File(...),
     voice: UploadFile = File(...),
-    background: str = Form(...)
+    background: str = Form(...),
+    text: str = Form(...)
 ):
 
     job_id = str(uuid.uuid4())
@@ -282,7 +412,7 @@ async def process_video(
 
                 f.write(chunk)
 
-        # Guardar voz de ElevenLabs
+        # Guardar voz
         with open(voice_path, "wb") as f:
 
             while True:
@@ -294,7 +424,7 @@ async def process_video(
 
                 f.write(chunk)
 
-        # Descargar música de fondo desde la URL
+        # Descargar música de fondo
         urllib.request.urlretrieve(
             background,
             background_path
@@ -304,14 +434,34 @@ async def process_video(
 
             jobs[job_id] = {
                 "status": "error",
-                "error": "No se pudo descargar el sonido de fondo"
+                "error": (
+                    "No se pudo descargar "
+                    "el sonido de fondo"
+                )
             }
 
             return {
                 "success": False,
                 "job_id": job_id,
                 "status": "error",
-                "error": "No se pudo descargar el sonido de fondo"
+                "error": (
+                    "No se pudo descargar "
+                    "el sonido de fondo"
+                )
+            }
+
+        if not text.strip():
+
+            jobs[job_id] = {
+                "status": "error",
+                "error": "El texto está vacío"
+            }
+
+            return {
+                "success": False,
+                "job_id": job_id,
+                "status": "error",
+                "error": "El texto está vacío"
             }
 
         jobs[job_id] = {
@@ -326,14 +476,14 @@ async def process_video(
                 input_path,
                 output_path,
                 voice_path,
-                background_path
+                background_path,
+                text
             ),
             daemon=True
         )
 
         thread.start()
 
-        # Responder inmediatamente a Make
         return {
             "success": True,
             "job_id": job_id,
