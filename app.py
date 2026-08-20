@@ -1,4 +1,3 @@
-```python
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -1238,4 +1237,3 @@ def get_status(
         status_code=404,
         detail="Job no encontrado"
     )
-```
