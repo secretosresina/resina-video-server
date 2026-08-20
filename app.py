@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import subprocess
@@ -6,6 +6,7 @@ import os
 import glob
 import uuid
 import threading
+import urllib.request
 
 app = FastAPI()
 
@@ -150,7 +151,13 @@ def get_video(filename: str):
     )
 
 
-def process_video_background(job_id, input_path, output_path):
+def process_video_background(
+    job_id,
+    input_path,
+    output_path,
+    voice_path,
+    background_path
+):
 
     try:
 
@@ -160,13 +167,40 @@ def process_video_background(job_id, input_path, output_path):
             [
                 "ffmpeg",
                 "-y",
+
+                # Video
                 "-i", input_path,
+
+                # Voz
+                "-i", voice_path,
+
+                # Música de fondo
+                "-stream_loop", "-1",
+                "-i", background_path,
+
+                # Mezcla de voz + música
+                "-filter_complex",
+                "[1:a]volume=1.0[voice];"
+                "[2:a]volume=0.20[bg];"
+                "[voice][bg]amix=inputs=2:duration=first:dropout_transition=2[audio]",
+
+                # Usar solamente el video original
+                # y la nueva mezcla de audio
+                "-map", "0:v",
+                "-map", "[audio]",
+
                 "-c:v", "libx264",
                 "-preset", "veryfast",
                 "-crf", "23",
+
                 "-c:a", "aac",
                 "-b:a", "128k",
+
+                # Terminar cuando termine el video
+                "-shortest",
+
                 "-movflags", "+faststart",
+
                 output_path
             ],
             capture_output=True,
@@ -206,13 +240,27 @@ def process_video_background(job_id, input_path, output_path):
 
 
 @app.post("/process_video")
-async def process_video(video: UploadFile = File(...)):
+async def process_video(
+    video: UploadFile = File(...),
+    voice: UploadFile = File(...),
+    background: str = Form(...)
+):
 
     job_id = str(uuid.uuid4())
 
     input_path = os.path.join(
         VIDEO_DIR,
         f"{job_id}_input.mp4"
+    )
+
+    voice_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_voice.mp3"
+    )
+
+    background_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_background.mp3"
     )
 
     output_path = os.path.join(
@@ -222,7 +270,7 @@ async def process_video(video: UploadFile = File(...)):
 
     try:
 
-        # Guardar el video recibido
+        # Guardar video
         with open(input_path, "wb") as f:
 
             while True:
@@ -234,14 +282,52 @@ async def process_video(video: UploadFile = File(...)):
 
                 f.write(chunk)
 
+        # Guardar voz de ElevenLabs
+        with open(voice_path, "wb") as f:
+
+            while True:
+
+                chunk = await voice.read(1024 * 1024)
+
+                if not chunk:
+                    break
+
+                f.write(chunk)
+
+        # Descargar música de fondo desde la URL
+        urllib.request.urlretrieve(
+            background,
+            background_path
+        )
+
+        if not os.path.isfile(background_path):
+
+            jobs[job_id] = {
+                "status": "error",
+                "error": "No se pudo descargar el sonido de fondo"
+            }
+
+            return {
+                "success": False,
+                "job_id": job_id,
+                "status": "error",
+                "error": "No se pudo descargar el sonido de fondo"
+            }
+
         jobs[job_id] = {
             "status": "queued"
         }
 
-        # Lanzar FFmpeg en segundo plano
+        # Procesar en segundo plano
         thread = threading.Thread(
             target=process_video_background,
-            args=(job_id, input_path, output_path),
+            args=(
+                job_id,
+                input_path,
+                output_path,
+                voice_path,
+                background_path
+            ),
             daemon=True
         )
 
