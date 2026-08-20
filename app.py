@@ -792,7 +792,7 @@ def process_video_background(
             "Outline=3,"
             "Shadow=1,"
             "Alignment=2,"
-            "MarginV=60'"
+            "MarginV=25'"
             "[video]"
         )
 
