@@ -5,11 +5,14 @@ import subprocess
 import os
 import glob
 import uuid
+import threading
 
 app = FastAPI()
 
 VIDEO_DIR = "/tmp/videos"
 os.makedirs(VIDEO_DIR, exist_ok=True)
+
+jobs = {}
 
 
 class VideoRequest(BaseModel):
@@ -147,35 +150,12 @@ def get_video(filename: str):
     )
 
 
-@app.post("/process_video")
-async def process_video(video: UploadFile = File(...)):
-
-    job_id = str(uuid.uuid4())
-
-    input_path = os.path.join(
-        VIDEO_DIR,
-        f"{job_id}_input.mp4"
-    )
-
-    output_path = os.path.join(
-        VIDEO_DIR,
-        f"{job_id}_processed.mp4"
-    )
+def process_video_background(job_id, input_path, output_path):
 
     try:
 
-        # Guardar el video recibido desde Make
-        with open(input_path, "wb") as f:
+        jobs[job_id]["status"] = "processing"
 
-            while True:
-                chunk = await video.read(1024 * 1024)
-
-                if not chunk:
-                    break
-
-                f.write(chunk)
-
-        # Procesar con FFmpeg
         result = subprocess.run(
             [
                 "ffmpeg",
@@ -195,32 +175,114 @@ async def process_video(video: UploadFile = File(...)):
         )
 
         if result.returncode != 0:
-            return {
-                "success": False,
-                "error": result.stderr[-4000:]
-            }
+
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"] = result.stderr[-4000:]
+            return
 
         if not os.path.isfile(output_path):
-            return {
-                "success": False,
-                "error": "FFmpeg no generó el video"
-            }
 
-        # Devolver el MP4 procesado directamente a Make
-        return FileResponse(
-            output_path,
-            media_type="video/mp4",
-            filename=f"{job_id}_processed.mp4"
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"] = "FFmpeg no generó el video"
+            return
+
+        filename = os.path.basename(output_path)
+
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["filename"] = filename
+        jobs[job_id]["download_url"] = (
+            f"https://resina-video-server.onrender.com/video/{filename}"
         )
 
     except subprocess.TimeoutExpired:
+
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = "FFmpeg superó los 300 segundos"
+
+    except Exception as e:
+
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+
+
+@app.post("/process_video")
+async def process_video(video: UploadFile = File(...)):
+
+    job_id = str(uuid.uuid4())
+
+    input_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_input.mp4"
+    )
+
+    output_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_processed.mp4"
+    )
+
+    try:
+
+        # Guardar el video recibido
+        with open(input_path, "wb") as f:
+
+            while True:
+
+                chunk = await video.read(1024 * 1024)
+
+                if not chunk:
+                    break
+
+                f.write(chunk)
+
+        jobs[job_id] = {
+            "status": "queued"
+        }
+
+        # Lanzar FFmpeg en segundo plano
+        thread = threading.Thread(
+            target=process_video_background,
+            args=(job_id, input_path, output_path),
+            daemon=True
+        )
+
+        thread.start()
+
+        # Responder inmediatamente a Make
         return {
-            "success": False,
-            "error": "El procesamiento superó los 300 segundos"
+            "success": True,
+            "job_id": job_id,
+            "status": "processing"
         }
 
     except Exception as e:
-        return {
-            "success": False,
+
+        jobs[job_id] = {
+            "status": "error",
             "error": str(e)
         }
+
+        return {
+            "success": False,
+            "job_id": job_id,
+            "status": "error",
+            "error": str(e)
+        }
+
+
+@app.get("/status/{job_id}")
+def get_status(job_id: str):
+
+    if job_id not in jobs:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Job no encontrado"
+        )
+
+    job = jobs[job_id]
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        **job
+    }
