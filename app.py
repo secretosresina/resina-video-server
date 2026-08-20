@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 import subprocess
 import os
 import glob
@@ -9,6 +10,10 @@ app = FastAPI()
 
 VIDEO_DIR = "/tmp/videos"
 os.makedirs(VIDEO_DIR, exist_ok=True)
+
+
+class VideoRequest(BaseModel):
+    tiktok_url: str
 
 
 @app.get("/")
@@ -37,7 +42,11 @@ def test_ffmpeg():
             timeout=10
         )
 
-        version = result.stdout.splitlines()[0] if result.stdout else "FFmpeg encontrado"
+        version = (
+            result.stdout.splitlines()[0]
+            if result.stdout
+            else "FFmpeg encontrado"
+        )
 
         return {
             "success": True,
@@ -52,9 +61,13 @@ def test_ffmpeg():
 
 
 @app.post("/download_video")
-def download_video(tiktok_url: str):
-    if not tiktok_url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="URL no válida")
+def download_video(data: VideoRequest):
+
+    if not data.tiktok_url.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=400,
+            detail="URL no válida"
+        )
 
     job_id = str(uuid.uuid4())
 
@@ -71,7 +84,7 @@ def download_video(tiktok_url: str):
                 "-f", "bv*+ba/b",
                 "--merge-output-format", "mp4",
                 "-o", output_template,
-                tiktok_url
+                data.tiktok_url
             ],
             capture_output=True,
             text=True,
@@ -118,6 +131,7 @@ def download_video(tiktok_url: str):
 
 @app.get("/video/{filename}")
 def get_video(filename: str):
+
     filepath = os.path.join(VIDEO_DIR, filename)
 
     if not os.path.isfile(filepath):
@@ -135,6 +149,7 @@ def get_video(filename: str):
 
 @app.post("/process_video")
 async def process_video(video: UploadFile = File(...)):
+
     job_id = str(uuid.uuid4())
 
     input_path = os.path.join(
@@ -148,13 +163,19 @@ async def process_video(video: UploadFile = File(...)):
     )
 
     try:
+
+        # Guardar el video recibido desde Make
         with open(input_path, "wb") as f:
+
             while True:
                 chunk = await video.read(1024 * 1024)
+
                 if not chunk:
                     break
+
                 f.write(chunk)
 
+        # Procesar con FFmpeg
         result = subprocess.run(
             [
                 "ffmpeg",
@@ -185,6 +206,7 @@ async def process_video(video: UploadFile = File(...)):
                 "error": "FFmpeg no generó el video"
             }
 
+        # Devolver el MP4 procesado directamente a Make
         return FileResponse(
             output_path,
             media_type="video/mp4",
