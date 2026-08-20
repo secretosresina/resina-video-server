@@ -1,5 +1,5 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 import subprocess
 import os
 import glob
@@ -9,10 +9,6 @@ app = FastAPI()
 
 VIDEO_DIR = "/tmp/videos"
 os.makedirs(VIDEO_DIR, exist_ok=True)
-
-
-class VideoRequest(BaseModel):
-    tiktok_url: str
 
 
 @app.get("/")
@@ -56,13 +52,9 @@ def test_ffmpeg():
 
 
 @app.post("/download_video")
-def download_video(data: VideoRequest):
-
-    if not data.tiktok_url.startswith(("http://", "https://")):
-        raise HTTPException(
-            status_code=400,
-            detail="URL no válida"
-        )
+def download_video(tiktok_url: str):
+    if not tiktok_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="URL no válida")
 
     job_id = str(uuid.uuid4())
 
@@ -79,7 +71,7 @@ def download_video(data: VideoRequest):
                 "-f", "bv*+ba/b",
                 "--merge-output-format", "mp4",
                 "-o", output_template,
-                data.tiktok_url
+                tiktok_url
             ],
             capture_output=True,
             text=True,
@@ -114,7 +106,7 @@ def download_video(data: VideoRequest):
     except subprocess.TimeoutExpired:
         return {
             "success": False,
-            "error": "La descarga superó el límite de 180 segundos"
+            "error": "La descarga superó 180 segundos"
         }
 
     except Exception as e:
@@ -126,9 +118,6 @@ def download_video(data: VideoRequest):
 
 @app.get("/video/{filename}")
 def get_video(filename: str):
-
-    from fastapi.responses import FileResponse
-
     filepath = os.path.join(VIDEO_DIR, filename)
 
     if not os.path.isfile(filepath):
@@ -142,3 +131,74 @@ def get_video(filename: str):
         media_type="video/mp4",
         filename=filename
     )
+
+
+@app.post("/process_video")
+async def process_video(video: UploadFile = File(...)):
+    job_id = str(uuid.uuid4())
+
+    input_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_input.mp4"
+    )
+
+    output_path = os.path.join(
+        VIDEO_DIR,
+        f"{job_id}_processed.mp4"
+    )
+
+    try:
+        with open(input_path, "wb") as f:
+            while True:
+                chunk = await video.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i", input_path,
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                output_path
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+
+        if result.returncode != 0:
+            return {
+                "success": False,
+                "error": result.stderr[-4000:]
+            }
+
+        if not os.path.isfile(output_path):
+            return {
+                "success": False,
+                "error": "FFmpeg no generó el video"
+            }
+
+        return FileResponse(
+            output_path,
+            media_type="video/mp4",
+            filename=f"{job_id}_processed.mp4"
+        )
+
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "error": "El procesamiento superó los 300 segundos"
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
