@@ -1,5 +1,5 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from pydantic import BaseModel
 import subprocess
 import os
@@ -37,7 +37,6 @@ def job_state_path(job_id):
 def save_job_state(job_id, data):
 
     path = job_state_path(job_id)
-
     temp_path = path + ".tmp"
 
     with open(
@@ -224,15 +223,37 @@ def download_video(data: VideoRequest):
 
 # ============================================================
 # SERVIR VIDEOS
+#
+# IMPORTANTE:
+#
+# Este endpoint ahora:
+#
+# - entrega video/mp4
+# - usa Content-Disposition inline
+# - informa Content-Length
+# - permite Range requests
+# - permite que clientes externos como Meta/Instagram
+#   puedan solicitar solamente una parte del archivo
+# - incluye soporte HEAD
 # ============================================================
 
-@app.get("/video/{filename}")
-def get_video(filename: str):
+def get_video_path(filename):
+
+    # Evitar que filename pueda salir de VIDEO_DIR
+    safe_filename = os.path.basename(filename)
 
     filepath = os.path.join(
         VIDEO_DIR,
-        filename
+        safe_filename
     )
+
+    return filepath
+
+
+@app.head("/video/{filename}")
+def head_video(filename: str):
+
+    filepath = get_video_path(filename)
 
     if not os.path.isfile(filepath):
 
@@ -241,11 +262,195 @@ def get_video(filename: str):
             detail="Video no encontrado"
         )
 
-    return FileResponse(
-        filepath,
-        media_type="video/mp4",
-        filename=filename
+    file_size = os.path.getsize(filepath)
+
+    return Response(
+        status_code=200,
+        headers={
+            "Content-Type": "video/mp4",
+            "Content-Length": str(file_size),
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": "inline",
+            "Cache-Control": "public, max-age=3600"
+        }
     )
+
+
+@app.get("/video/{filename}")
+def get_video(
+    filename: str,
+    request: Request
+):
+
+    filepath = get_video_path(filename)
+
+    if not os.path.isfile(filepath):
+
+        raise HTTPException(
+            status_code=404,
+            detail="Video no encontrado"
+        )
+
+    file_size = os.path.getsize(filepath)
+
+    range_header = request.headers.get("range")
+
+    # --------------------------------------------------------
+    # Sin Range:
+    # entregar archivo completo
+    # --------------------------------------------------------
+
+    if not range_header:
+
+        return FileResponse(
+            filepath,
+            media_type="video/mp4",
+            headers={
+                "Content-Length": str(file_size),
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": "inline",
+                "Cache-Control": "public, max-age=3600"
+            }
+        )
+
+    # --------------------------------------------------------
+    # Range request
+    #
+    # Ejemplo:
+    # Range: bytes=0-999999
+    # --------------------------------------------------------
+
+    try:
+
+        range_value = range_header.replace(
+            "bytes=",
+            "",
+            1
+        ).strip()
+
+        if "," in range_value:
+
+            raise ValueError(
+                "Multiple ranges no soportados"
+            )
+
+        start_str, end_str = range_value.split(
+            "-",
+            1
+        )
+
+        if start_str:
+
+            start = int(start_str)
+
+        else:
+
+            # bytes=-500000
+            # significa los últimos 500000 bytes
+
+            suffix_length = int(end_str)
+
+            if suffix_length <= 0:
+
+                raise ValueError(
+                    "Range inválido"
+                )
+
+            start = max(
+                file_size - suffix_length,
+                0
+            )
+
+        if end_str:
+
+            end = int(end_str)
+
+        else:
+
+            end = file_size - 1
+
+        if start < 0:
+            start = 0
+
+        if end >= file_size:
+            end = file_size - 1
+
+        if start > end or start >= file_size:
+
+            return Response(
+                status_code=416,
+                headers={
+                    "Content-Range":
+                        f"bytes */{file_size}"
+                }
+            )
+
+        content_length = (
+            end - start + 1
+        )
+
+        def iter_file():
+
+            with open(
+                filepath,
+                "rb"
+            ) as video_file:
+
+                video_file.seek(start)
+
+                remaining = content_length
+
+                chunk_size = 1024 * 1024
+
+                while remaining > 0:
+
+                    read_size = min(
+                        chunk_size,
+                        remaining
+                    )
+
+                    chunk = video_file.read(
+                        read_size
+                    )
+
+                    if not chunk:
+                        break
+
+                    remaining -= len(chunk)
+
+                    yield chunk
+
+        return StreamingResponse(
+            iter_file(),
+            status_code=206,
+            media_type="video/mp4",
+            headers={
+                "Content-Length":
+                    str(content_length),
+
+                "Content-Range":
+                    f"bytes {start}-{end}/{file_size}",
+
+                "Accept-Ranges":
+                    "bytes",
+
+                "Content-Disposition":
+                    "inline",
+
+                "Cache-Control":
+                    "public, max-age=3600"
+            }
+        )
+
+    except Exception:
+
+        return Response(
+            status_code=416,
+            headers={
+                "Content-Range":
+                    f"bytes */{file_size}"
+            }
+        )
 
 
 # ============================================================
@@ -752,16 +957,6 @@ def process_video_background(
 
         # ----------------------------------------------------
         # 5. FFmpeg
-        #
-        # -stream_loop -1 hace que el video se repita
-        # automáticamente.
-        #
-        # -t limita el resultado a la duración de la voz.
-        #
-        # Por tanto:
-        #
-        # video 8s + voz 15s = resultado 15s
-        # video 30s + voz 15s = resultado 15s
         # ----------------------------------------------------
 
         filter_complex = (
@@ -801,37 +996,30 @@ def process_video_background(
                 "ffmpeg",
                 "-y",
 
-                # Video
                 "-stream_loop",
                 "-1",
 
                 "-i",
                 input_path,
 
-                # Voz
                 "-i",
                 voice_path,
 
-                # Música
                 "-stream_loop",
                 "-1",
 
                 "-i",
                 background_path,
 
-                # Filtros
                 "-filter_complex",
                 filter_complex,
 
-                # Video final
                 "-map",
                 "[video]",
 
-                # Audio final
                 "-map",
                 "[audio]",
 
-                # Video
                 "-c:v",
                 "libx264",
 
@@ -841,14 +1029,12 @@ def process_video_background(
                 "-crf",
                 "23",
 
-                # Audio
                 "-c:a",
                 "aac",
 
                 "-b:a",
                 "128k",
 
-                # Duración = voz
                 "-t",
                 str(voice_duration),
 
@@ -1151,8 +1337,6 @@ def get_status(
 
     # --------------------------------------------------------
     # Si el video final existe, siempre está completado.
-    # Esto permite recuperar el estado incluso después
-    # de un reinicio del proceso.
     # --------------------------------------------------------
 
     if os.path.isfile(
@@ -1193,8 +1377,7 @@ def get_status(
         }
 
     # --------------------------------------------------------
-    # Si existen los archivos de entrada, el trabajo existe
-    # aunque el diccionario de memoria se haya perdido.
+    # Si existen los archivos de entrada, el trabajo existe.
     # --------------------------------------------------------
 
     if (
@@ -1218,7 +1401,7 @@ def get_status(
         }
 
     # --------------------------------------------------------
-    # Si tenemos estado guardado, devolverlo
+    # Si tenemos estado guardado, devolverlo.
     # --------------------------------------------------------
 
     if state:
@@ -1230,7 +1413,7 @@ def get_status(
         }
 
     # --------------------------------------------------------
-    # No existe absolutamente nada relacionado con ese job
+    # No existe absolutamente nada relacionado con ese job.
     # --------------------------------------------------------
 
     raise HTTPException(
