@@ -12,6 +12,17 @@ import json
 
 
 app = FastAPI()
+# ============================================================
+# VERIFICACIÓN DE DOMINIO DE TIKTOK
+# ============================================================
+
+@app.get("/tiktokMBXNgoJHxI9pXwUdcx90DU4Hgx7rg8RV.txt")
+def tiktok_verification():
+
+    return Response(
+        content="tiktok-developers-site-verification=MBXNgoJHxI9pXwUdcx90DU4Hgx7rg8RV",
+        media_type="text/plain"
+    )
 
 VIDEO_DIR = "/tmp/videos"
 os.makedirs(VIDEO_DIR, exist_ok=True)
