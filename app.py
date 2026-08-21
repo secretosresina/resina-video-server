@@ -1,6 +1,22 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import FileResponse, StreamingResponse, Response, PlainTextResponse
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    UploadFile,
+    File,
+    Form,
+    Request
+)
+
+from fastapi.responses import (
+    FileResponse,
+    StreamingResponse,
+    Response,
+    PlainTextResponse,
+    RedirectResponse
+)
+
 from pydantic import BaseModel
+
 import subprocess
 import os
 import glob
@@ -8,32 +24,138 @@ import uuid
 import threading
 import urllib.request
 import urllib.error
+import urllib.parse
 import json
+import time
 
 
-app = FastAPI()
 # ============================================================
-# VERIFICACIÓN DE DOMINIO DE TIKTOK
+# APP
 # ============================================================
 
-@app.get("/tiktokMBXNgoJHxI9pXwUdcx90DU4Hgx7rg8RV.txt")
-def tiktok_verification():
+app = FastAPI(
+    title="Resina Video Server"
+)
 
-    return Response(
-        content="tiktok-developers-site-verification=MBXNgoJHxI9pXwUdcx90DU4Hgx7rg8RV",
-        media_type="text/plain"
-    )
+
+# ============================================================
+# CONFIGURACIÓN GENERAL
+# ============================================================
+
+BASE_URL = os.getenv(
+    "BASE_URL",
+    "https://resina-video-server.onrender.com"
+).rstrip("/")
+
 
 VIDEO_DIR = "/tmp/videos"
-os.makedirs(VIDEO_DIR, exist_ok=True)
 
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+os.makedirs(
+    VIDEO_DIR,
+    exist_ok=True
+)
 
 
 # ============================================================
-# TIKTOK DOMAIN VERIFICATION
+# ELEVENLABS
 # ============================================================
 
+ELEVENLABS_API_KEY = os.getenv(
+    "ELEVENLABS_API_KEY"
+)
+
+
+# ============================================================
+# TIKTOK
+# ============================================================
+
+TIKTOK_CLIENT_KEY = os.getenv(
+    "TIKTOK_CLIENT_KEY"
+)
+
+TIKTOK_CLIENT_SECRET = os.getenv(
+    "TIKTOK_CLIENT_SECRET"
+)
+
+TIKTOK_REDIRECT_URI = os.getenv(
+    "TIKTOK_REDIRECT_URI",
+    f"{BASE_URL}/tiktok/callback"
+)
+
+
+TIKTOK_AUTHORIZE_URL = (
+    "https://www.tiktok.com/v2/auth/authorize/"
+)
+
+TIKTOK_TOKEN_URL = (
+    "https://open.tiktokapis.com/v2/oauth/token/"
+)
+
+TIKTOK_USER_INFO_URL = (
+    "https://open.tiktokapis.com/v2/user/info/"
+)
+
+TIKTOK_CREATOR_INFO_URL = (
+    "https://open.tiktokapis.com/v2/post/publish/creator_info/query/"
+)
+
+TIKTOK_PUBLISH_URL = (
+    "https://open.tiktokapis.com/v2/post/publish/video/init/"
+)
+
+TIKTOK_STATUS_URL = (
+    "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
+)
+
+
+# ============================================================
+# TIKTOK SCOPES
+# ============================================================
+
+TIKTOK_SCOPES = (
+    "user.info.basic,"
+    "video.publish,"
+    "video.upload"
+)
+
+
+# ============================================================
+# TOKEN STORAGE
+#
+# Para pruebas dejamos los tokens en /tmp.
+#
+# IMPORTANTE:
+# /tmp puede desaparecer cuando Render reinicia el servicio.
+# Más adelante podemos pasar esto a una base de datos.
+# ============================================================
+
+TIKTOK_TOKEN_FILE = os.path.join(
+    VIDEO_DIR,
+    "tiktok_tokens.json"
+)
+
+
+# ============================================================
+# OAUTH STATE
+#
+# Guardamos temporalmente los state generados.
+# ============================================================
+
+OAUTH_STATE_FILE = os.path.join(
+    VIDEO_DIR,
+    "tiktok_oauth_states.json"
+)
+
+
+# ============================================================
+# VERIFICACIÓN DE DOMINIO TIKTOK
+# ============================================================
+
+TIKTOK_VERIFICATION_FILE = (
+    "tiktokMBXNgoJHxI9pXWdcx90DU4Hgx7rg8RV.txt"
+)
+
+# El nombre correcto según tu código original:
 TIKTOK_VERIFICATION_FILE = (
     "tiktokMBXNgoJHxI9pXwUdcx90DU4Hgx7rg8RV.txt"
 )
@@ -53,34 +175,27 @@ def tiktok_verification():
     return TIKTOK_VERIFICATION_CONTENT
 
 
-# También dejamos disponible el nombre estándar por seguridad.
-@app.get(
-    "/tiktok-developers-site-verification.txt",
-    response_class=PlainTextResponse
-)
-def tiktok_verification_standard():
-
-    return TIKTOK_VERIFICATION_CONTENT
-
-
-class VideoRequest(BaseModel):
-    tiktok_url: str
-
-
 # ============================================================
-# UTILIDADES DE ESTADO
+# ESTADO DE JOBS
 # ============================================================
 
 def job_state_path(job_id):
+
     return os.path.join(
         VIDEO_DIR,
         f"{job_id}.json"
     )
 
 
-def save_job_state(job_id, data):
+def save_job_state(
+    job_id,
+    data
+):
 
-    path = job_state_path(job_id)
+    path = job_state_path(
+        job_id
+    )
+
     temp_path = path + ".tmp"
 
     with open(
@@ -101,11 +216,18 @@ def save_job_state(job_id, data):
     )
 
 
-def load_job_state(job_id):
+def load_job_state(
+    job_id
+):
 
-    path = job_state_path(job_id)
+    path = job_state_path(
+        job_id
+    )
 
-    if not os.path.isfile(path):
+    if not os.path.isfile(
+        path
+    ):
+
         return None
 
     try:
@@ -124,7 +246,1037 @@ def load_job_state(job_id):
 
 
 # ============================================================
-# HOME / TEST
+# TIKTOK TOKEN STORAGE
+# ============================================================
+
+def save_tiktok_tokens(
+    token_data
+):
+
+    data = dict(
+        token_data
+    )
+
+    data["saved_at"] = int(
+        time.time()
+    )
+
+    temp_path = (
+        TIKTOK_TOKEN_FILE
+        + ".tmp"
+    )
+
+    with open(
+        temp_path,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        json.dump(
+            data,
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    os.replace(
+        temp_path,
+        TIKTOK_TOKEN_FILE
+    )
+
+
+def load_tiktok_tokens():
+
+    if not os.path.isfile(
+        TIKTOK_TOKEN_FILE
+    ):
+
+        return None
+
+    try:
+
+        with open(
+            TIKTOK_TOKEN_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            return json.load(f)
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
+# OAUTH STATE STORAGE
+# ============================================================
+
+def save_oauth_state(
+    state
+):
+
+    states = {}
+
+    if os.path.isfile(
+        OAUTH_STATE_FILE
+    ):
+
+        try:
+
+            with open(
+                OAUTH_STATE_FILE,
+                "r",
+                encoding="utf-8"
+            ) as f:
+
+                states = json.load(f)
+
+        except Exception:
+
+            states = {}
+
+    states[state] = int(
+        time.time()
+    )
+
+    # Limpiar states antiguos
+    now = int(
+        time.time()
+    )
+
+    states = {
+        key: value
+        for key, value in states.items()
+        if now - value < 600
+    }
+
+    temp_path = (
+        OAUTH_STATE_FILE
+        + ".tmp"
+    )
+
+    with open(
+        temp_path,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        json.dump(
+            states,
+            f
+        )
+
+    os.replace(
+        temp_path,
+        OAUTH_STATE_FILE
+    )
+
+
+def consume_oauth_state(
+    state
+):
+
+    if not os.path.isfile(
+        OAUTH_STATE_FILE
+    ):
+
+        return False
+
+    try:
+
+        with open(
+            OAUTH_STATE_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            states = json.load(f)
+
+    except Exception:
+
+        return False
+
+    created_at = states.pop(
+        state,
+        None
+    )
+
+    try:
+
+        with open(
+            OAUTH_STATE_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            json.dump(
+                states,
+                f
+            )
+
+    except Exception:
+
+        pass
+
+    if created_at is None:
+
+        return False
+
+    if (
+        int(time.time())
+        - int(created_at)
+        > 600
+    ):
+
+        return False
+
+    return True
+
+
+# ============================================================
+# TIKTOK OAUTH - LOGIN
+# ============================================================
+
+@app.get(
+    "/tiktok/login"
+)
+def tiktok_login():
+
+    if not TIKTOK_CLIENT_KEY:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Falta TIKTOK_CLIENT_KEY "
+                "en las variables de entorno "
+                "de Render."
+            )
+        )
+
+    if not TIKTOK_CLIENT_SECRET:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Falta TIKTOK_CLIENT_SECRET "
+                "en las variables de entorno "
+                "de Render."
+            )
+        )
+
+    state = uuid.uuid4().hex
+
+    save_oauth_state(
+        state
+    )
+
+    params = {
+        "client_key": TIKTOK_CLIENT_KEY,
+        "response_type": "code",
+        "scope": TIKTOK_SCOPES,
+        "redirect_uri": TIKTOK_REDIRECT_URI,
+        "state": state,
+    }
+
+    authorize_url = (
+        TIKTOK_AUTHORIZE_URL
+        + "?"
+        + urllib.parse.urlencode(
+            params
+        )
+    )
+
+    return RedirectResponse(
+        url=authorize_url,
+        status_code=302
+    )
+
+
+# ============================================================
+# TIKTOK OAUTH - CALLBACK
+# ============================================================
+
+@app.get(
+    "/tiktok/callback"
+)
+def tiktok_callback(
+    code: str = None,
+    state: str = None,
+    error: str = None,
+    error_description: str = None
+):
+
+    if error:
+
+        return {
+            "success": False,
+            "stage": "tiktok_callback",
+            "error": error,
+            "error_description":
+                error_description
+        }
+
+    if not code:
+
+        return {
+            "success": False,
+            "stage": "tiktok_callback",
+            "error": (
+                "TikTok no devolvió "
+                "un authorization code."
+            )
+        }
+
+    if not state:
+
+        return {
+            "success": False,
+            "stage": "tiktok_callback",
+            "error": (
+                "TikTok no devolvió "
+                "state."
+            )
+        }
+
+    if not consume_oauth_state(
+        state
+    ):
+
+        return {
+            "success": False,
+            "stage": "tiktok_callback",
+            "error": (
+                "State inválido o expirado. "
+                "Vuelve a iniciar sesión."
+            )
+        }
+
+    try:
+
+        token_data = exchange_code_for_token(
+            code
+        )
+
+        save_tiktok_tokens(
+            token_data
+        )
+
+        user_data = get_tiktok_user(
+            token_data[
+                "access_token"
+            ]
+        )
+
+        return {
+            "success": True,
+            "message": (
+                "TikTok conectado correctamente."
+            ),
+            "open_id": token_data.get(
+                "open_id"
+            ),
+            "scope": token_data.get(
+                "scope"
+            ),
+            "user": user_data
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "stage": "token_exchange",
+            "error": str(e)
+        }
+
+
+# ============================================================
+# INTERCAMBIAR CODE POR TOKEN
+# ============================================================
+
+def exchange_code_for_token(
+    code
+):
+
+    if not TIKTOK_CLIENT_KEY:
+
+        raise Exception(
+            "Falta TIKTOK_CLIENT_KEY."
+        )
+
+    if not TIKTOK_CLIENT_SECRET:
+
+        raise Exception(
+            "Falta TIKTOK_CLIENT_SECRET."
+        )
+
+    form_data = {
+        "client_key":
+            TIKTOK_CLIENT_KEY,
+
+        "client_secret":
+            TIKTOK_CLIENT_SECRET,
+
+        "code":
+            code,
+
+        "grant_type":
+            "authorization_code",
+
+        "redirect_uri":
+            TIKTOK_REDIRECT_URI
+    }
+
+    body = urllib.parse.urlencode(
+        form_data
+    ).encode(
+        "utf-8"
+    )
+
+    request = urllib.request.Request(
+        TIKTOK_TOKEN_URL,
+        data=body,
+        method="POST"
+    )
+
+    request.add_header(
+        "Content-Type",
+        "application/x-www-form-urlencoded"
+    )
+
+    request.add_header(
+        "Cache-Control",
+        "no-cache"
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            request,
+            timeout=30
+        ) as response:
+
+            response_body = (
+                response.read()
+                .decode(
+                    "utf-8"
+                )
+            )
+
+        data = json.loads(
+            response_body
+        )
+
+        if (
+            "access_token"
+            not in data
+        ):
+
+            raise Exception(
+                "TikTok no devolvió "
+                f"access_token: {data}"
+            )
+
+        return data
+
+    except urllib.error.HTTPError as e:
+
+        error_body = (
+            e.read()
+            .decode(
+                "utf-8",
+                errors="replace"
+            )
+        )
+
+        raise Exception(
+            "TikTok OAuth HTTP "
+            f"{e.code}: "
+            f"{error_body}"
+        )
+
+
+# ============================================================
+# REFRESCAR TOKEN TIKTOK
+# ============================================================
+
+def refresh_tiktok_token():
+
+    tokens = load_tiktok_tokens()
+
+    if not tokens:
+
+        raise Exception(
+            "No existe una sesión TikTok. "
+            "Abre /tiktok/login primero."
+        )
+
+    refresh_token = tokens.get(
+        "refresh_token"
+    )
+
+    if not refresh_token:
+
+        raise Exception(
+            "No existe refresh_token."
+        )
+
+    form_data = {
+        "client_key":
+            TIKTOK_CLIENT_KEY,
+
+        "client_secret":
+            TIKTOK_CLIENT_SECRET,
+
+        "grant_type":
+            "refresh_token",
+
+        "refresh_token":
+            refresh_token
+    }
+
+    body = urllib.parse.urlencode(
+        form_data
+    ).encode(
+        "utf-8"
+    )
+
+    request = urllib.request.Request(
+        TIKTOK_TOKEN_URL,
+        data=body,
+        method="POST"
+    )
+
+    request.add_header(
+        "Content-Type",
+        "application/x-www-form-urlencoded"
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            request,
+            timeout=30
+        ) as response:
+
+            response_body = (
+                response.read()
+                .decode(
+                    "utf-8"
+                )
+            )
+
+        new_tokens = json.loads(
+            response_body
+        )
+
+        if (
+            "access_token"
+            not in new_tokens
+        ):
+
+            raise Exception(
+                "TikTok no devolvió "
+                f"un nuevo access_token: "
+                f"{new_tokens}"
+            )
+
+        save_tiktok_tokens(
+            new_tokens
+        )
+
+        return new_tokens
+
+    except urllib.error.HTTPError as e:
+
+        error_body = (
+            e.read()
+            .decode(
+                "utf-8",
+                errors="replace"
+            )
+        )
+
+        raise Exception(
+            "Error refrescando token "
+            f"TikTok HTTP {e.code}: "
+            f"{error_body}"
+        )
+
+
+# ============================================================
+# OBTENER TOKEN ACTUAL
+# ============================================================
+
+def get_tiktok_access_token():
+
+    tokens = load_tiktok_tokens()
+
+    if not tokens:
+
+        raise Exception(
+            "TikTok no está conectado. "
+            "Abre /tiktok/login."
+        )
+
+    access_token = tokens.get(
+        "access_token"
+    )
+
+    if not access_token:
+
+        raise Exception(
+            "No existe access_token."
+        )
+
+    saved_at = int(
+        tokens.get(
+            "saved_at",
+            0
+        )
+    )
+
+    expires_in = int(
+        tokens.get(
+            "expires_in",
+            86400
+        )
+    )
+
+    # Refrescar 10 minutos antes
+    if (
+        time.time()
+        >= saved_at
+        + expires_in
+        - 600
+    ):
+
+        try:
+
+            refreshed = (
+                refresh_tiktok_token()
+            )
+
+            return refreshed[
+                "access_token"
+            ]
+
+        except Exception:
+
+            # Si todavía funciona,
+            # devolvemos el actual.
+            return access_token
+
+    return access_token
+
+
+# ============================================================
+# LLAMADA JSON GENÉRICA A TIKTOK
+# ============================================================
+
+def tiktok_json_request(
+    url,
+    method="POST",
+    payload=None
+):
+
+    access_token = (
+        get_tiktok_access_token()
+    )
+
+    body = None
+
+    if payload is not None:
+
+        body = json.dumps(
+            payload
+        ).encode(
+            "utf-8"
+        )
+
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method=method
+    )
+
+    request.add_header(
+        "Authorization",
+        f"Bearer {access_token}"
+    )
+
+    request.add_header(
+        "Content-Type",
+        "application/json; charset=UTF-8"
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            request,
+            timeout=60
+        ) as response:
+
+            response_body = (
+                response.read()
+                .decode(
+                    "utf-8"
+                )
+            )
+
+        return json.loads(
+            response_body
+        )
+
+    except urllib.error.HTTPError as e:
+
+        error_body = (
+            e.read()
+            .decode(
+                "utf-8",
+                errors="replace"
+            )
+        )
+
+        raise Exception(
+            f"TikTok API HTTP {e.code}: "
+            f"{error_body}"
+        )
+
+
+# ============================================================
+# OBTENER INFORMACIÓN DEL USUARIO TIKTOK
+# ============================================================
+
+def get_tiktok_user(
+    access_token
+):
+
+    params = urllib.parse.urlencode(
+        {
+            "fields":
+                "open_id,display_name,avatar_url,profile_deep_link"
+        }
+    )
+
+    url = (
+        TIKTOK_USER_INFO_URL
+        + "?"
+        + params
+    )
+
+    request = urllib.request.Request(
+        url,
+        method="GET"
+    )
+
+    request.add_header(
+        "Authorization",
+        f"Bearer {access_token}"
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            request,
+            timeout=30
+        ) as response:
+
+            response_body = (
+                response.read()
+                .decode(
+                    "utf-8"
+                )
+            )
+
+        return json.loads(
+            response_body
+        )
+
+    except urllib.error.HTTPError as e:
+
+        error_body = (
+            e.read()
+            .decode(
+                "utf-8",
+                errors="replace"
+            )
+        )
+
+        raise Exception(
+            "TikTok user info error "
+            f"{e.code}: "
+            f"{error_body}"
+        )
+
+
+# ============================================================
+# TEST TIKTOK
+# ============================================================
+
+@app.get(
+    "/tiktok/me"
+)
+def tiktok_me():
+
+    try:
+
+        access_token = (
+            get_tiktok_access_token()
+        )
+
+        data = get_tiktok_user(
+            access_token
+        )
+
+        return {
+            "success": True,
+            "connected": True,
+            "data": data
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "connected": False,
+            "error": str(e)
+        }
+
+
+# ============================================================
+# CREATOR INFO
+# ============================================================
+
+@app.get(
+    "/tiktok/creator-info"
+)
+def tiktok_creator_info():
+
+    try:
+
+        data = tiktok_json_request(
+            TIKTOK_CREATOR_INFO_URL,
+            method="POST",
+            payload={}
+        )
+
+        return {
+            "success": True,
+            "data": data
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# ============================================================
+# PUBLICAR VIDEO A TIKTOK
+#
+# Usa PULL_FROM_URL.
+#
+# TikTok descarga directamente el MP4
+# desde nuestro dominio verificado.
+# ============================================================
+
+class TikTokPublishRequest(
+    BaseModel
+):
+
+    video_url: str
+
+    title: str = ""
+
+    privacy_level: str = (
+        "SELF_ONLY"
+    )
+
+    disable_comment: bool = False
+
+    disable_duet: bool = False
+
+    disable_stitch: bool = False
+
+    is_aigc: bool = False
+
+
+@app.post(
+    "/tiktok/publish"
+)
+def tiktok_publish(
+    data: TikTokPublishRequest
+):
+
+    if not data.video_url.startswith(
+        "https://"
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "video_url debe comenzar "
+                "con https://"
+            )
+        )
+
+    if not data.video_url.startswith(
+        BASE_URL
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Por seguridad, el video "
+                "debe estar alojado en "
+                f"{BASE_URL}"
+            )
+        )
+
+    allowed_privacy = {
+        "PUBLIC_TO_EVERYONE",
+        "MUTUAL_FOLLOW_FRIENDS",
+        "FOLLOWER_OF_CREATOR",
+        "SELF_ONLY"
+    }
+
+    if (
+        data.privacy_level
+        not in allowed_privacy
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "privacy_level inválido. "
+                f"Usa uno de: "
+                f"{', '.join(allowed_privacy)}"
+            )
+        )
+
+    post_info = {
+        "title": data.title[:2200],
+        "privacy_level":
+            data.privacy_level,
+        "disable_comment":
+            data.disable_comment,
+        "disable_duet":
+            data.disable_duet,
+        "disable_stitch":
+            data.disable_stitch
+    }
+
+    if data.is_aigc:
+
+        post_info["is_aigc"] = True
+
+    payload = {
+        "post_info": post_info,
+        "source_info": {
+            "source":
+                "PULL_FROM_URL",
+            "video_url":
+                data.video_url
+        }
+    }
+
+    try:
+
+        result = tiktok_json_request(
+            TIKTOK_PUBLISH_URL,
+            method="POST",
+            payload=payload
+        )
+
+        error_data = result.get(
+            "error",
+            {}
+        )
+
+        if (
+            error_data
+            and error_data.get("code")
+            not in (None, "", "ok")
+        ):
+
+            return {
+                "success": False,
+                "tiktok": result
+            }
+
+        publish_id = (
+            result.get(
+                "data",
+                {}
+            ).get(
+                "publish_id"
+            )
+        )
+
+        return {
+            "success": True,
+            "publish_id":
+                publish_id,
+            "tiktok":
+                result
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# ============================================================
+# ESTADO DE PUBLICACIÓN TIKTOK
+# ============================================================
+
+class TikTokStatusRequest(
+    BaseModel
+):
+
+    publish_id: str
+
+
+@app.post(
+    "/tiktok/status"
+)
+def tiktok_status(
+    data: TikTokStatusRequest
+):
+
+    try:
+
+        result = tiktok_json_request(
+            TIKTOK_STATUS_URL,
+            method="POST",
+            payload={
+                "publish_id":
+                    data.publish_id
+            }
+        )
+
+        return {
+            "success": True,
+            "data": result
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# ============================================================
+# HOME
 # ============================================================
 
 @app.get("/")
@@ -132,26 +1284,52 @@ def home():
 
     return {
         "status": "online",
-        "message": "Servidor de procesamiento de videos funcionando"
+        "message": (
+            "Servidor de procesamiento "
+            "de videos funcionando"
+        ),
+        "tiktok_oauth": (
+            f"{BASE_URL}/tiktok/login"
+        ),
+        "tiktok_test": (
+            f"{BASE_URL}/tiktok/me"
+        )
     }
 
 
-@app.get("/test")
+# ============================================================
+# TEST
+# ============================================================
+
+@app.get(
+    "/test"
+)
 def test():
 
     return {
         "success": True,
-        "message": "Render está conectado correctamente"
+        "message": (
+            "Render está conectado correctamente"
+        )
     }
 
 
-@app.get("/test_ffmpeg")
+# ============================================================
+# TEST FFMPEG
+# ============================================================
+
+@app.get(
+    "/test_ffmpeg"
+)
 def test_ffmpeg():
 
     try:
 
         result = subprocess.run(
-            ["ffmpeg", "-version"],
+            [
+                "ffmpeg",
+                "-version"
+            ],
             capture_output=True,
             text=True,
             timeout=10
@@ -180,11 +1358,25 @@ def test_ffmpeg():
 # DESCARGAR VIDEO DE TIKTOK
 # ============================================================
 
-@app.post("/download_video")
-def download_video(data: VideoRequest):
+class VideoRequest(
+    BaseModel
+):
+
+    tiktok_url: str
+
+
+@app.post(
+    "/download_video"
+)
+def download_video(
+    data: VideoRequest
+):
 
     if not data.tiktok_url.startswith(
-        ("http://", "https://")
+        (
+            "http://",
+            "https://"
+        )
     ):
 
         raise HTTPException(
@@ -192,7 +1384,9 @@ def download_video(data: VideoRequest):
             detail="URL no válida"
         )
 
-    job_id = str(uuid.uuid4())
+    job_id = str(
+        uuid.uuid4()
+    )
 
     output_template = os.path.join(
         VIDEO_DIR,
@@ -205,9 +1399,12 @@ def download_video(data: VideoRequest):
             [
                 "yt-dlp",
                 "--no-playlist",
-                "-f", "bv*+ba/b",
-                "--merge-output-format", "mp4",
-                "-o", output_template,
+                "-f",
+                "bv*+ba/b",
+                "--merge-output-format",
+                "mp4",
+                "-o",
+                output_template,
                 data.tiktok_url
             ],
             capture_output=True,
@@ -219,7 +1416,8 @@ def download_video(data: VideoRequest):
 
             return {
                 "success": False,
-                "error": result.stderr[-3000:]
+                "error":
+                    result.stderr[-3000:]
             }
 
         files = glob.glob(
@@ -248,7 +1446,7 @@ def download_video(data: VideoRequest):
             "job_id": job_id,
             "filename": filename,
             "download_url": (
-                "https://resina-video-server.onrender.com"
+                f"{BASE_URL}"
                 f"/video/{filename}"
             )
         }
@@ -257,7 +1455,10 @@ def download_video(data: VideoRequest):
 
         return {
             "success": False,
-            "error": "La descarga superó 180 segundos"
+            "error": (
+                "La descarga superó "
+                "180 segundos"
+            )
         }
 
     except Exception as e:
@@ -272,62 +1473,93 @@ def download_video(data: VideoRequest):
 # SERVIR VIDEOS
 # ============================================================
 
-def get_video_path(filename):
+def get_video_path(
+    filename
+):
 
-    safe_filename = os.path.basename(filename)
+    safe_filename = os.path.basename(
+        filename
+    )
 
-    filepath = os.path.join(
+    return os.path.join(
         VIDEO_DIR,
         safe_filename
     )
 
-    return filepath
 
+@app.head(
+    "/video/{filename}"
+)
+def head_video(
+    filename: str
+):
 
-@app.head("/video/{filename}")
-def head_video(filename: str):
+    filepath = get_video_path(
+        filename
+    )
 
-    filepath = get_video_path(filename)
-
-    if not os.path.isfile(filepath):
+    if not os.path.isfile(
+        filepath
+    ):
 
         raise HTTPException(
             status_code=404,
             detail="Video no encontrado"
         )
 
-    file_size = os.path.getsize(filepath)
+    file_size = os.path.getsize(
+        filepath
+    )
 
     return Response(
         status_code=200,
         headers={
-            "Content-Type": "video/mp4",
-            "Content-Length": str(file_size),
-            "Accept-Ranges": "bytes",
-            "Content-Disposition": "inline",
-            "Cache-Control": "public, max-age=3600"
+            "Content-Type":
+                "video/mp4",
+
+            "Content-Length":
+                str(file_size),
+
+            "Accept-Ranges":
+                "bytes",
+
+            "Content-Disposition":
+                "inline",
+
+            "Cache-Control":
+                "public, max-age=3600"
         }
     )
 
 
-@app.get("/video/{filename}")
+@app.get(
+    "/video/{filename}"
+)
 def get_video(
     filename: str,
     request: Request
 ):
 
-    filepath = get_video_path(filename)
+    filepath = get_video_path(
+        filename
+    )
 
-    if not os.path.isfile(filepath):
+    if not os.path.isfile(
+        filepath
+    ):
 
         raise HTTPException(
             status_code=404,
             detail="Video no encontrado"
         )
 
-    file_size = os.path.getsize(filepath)
+    file_size = os.path.getsize(
+        filepath
+    )
 
-    range_header = request.headers.get("range")
+    range_header = request.headers.get(
+        "range"
+    )
 
     if not range_header:
 
@@ -335,39 +1567,57 @@ def get_video(
             filepath,
             media_type="video/mp4",
             headers={
-                "Content-Length": str(file_size),
-                "Accept-Ranges": "bytes",
-                "Content-Disposition": "inline",
-                "Cache-Control": "public, max-age=3600"
+                "Content-Length":
+                    str(file_size),
+
+                "Accept-Ranges":
+                    "bytes",
+
+                "Content-Disposition":
+                    "inline",
+
+                "Cache-Control":
+                    "public, max-age=3600"
             }
         )
 
     try:
 
-        range_value = range_header.replace(
-            "bytes=",
-            "",
-            1
-        ).strip()
+        range_value = (
+            range_header
+            .replace(
+                "bytes=",
+                "",
+                1
+            )
+            .strip()
+        )
 
         if "," in range_value:
 
             raise ValueError(
-                "Multiple ranges no soportados"
+                "Multiple ranges "
+                "no soportados"
             )
 
-        start_str, end_str = range_value.split(
-            "-",
-            1
+        start_str, end_str = (
+            range_value.split(
+                "-",
+                1
+            )
         )
 
         if start_str:
 
-            start = int(start_str)
+            start = int(
+                start_str
+            )
 
         else:
 
-            suffix_length = int(end_str)
+            suffix_length = int(
+                end_str
+            )
 
             if suffix_length <= 0:
 
@@ -376,25 +1626,33 @@ def get_video(
                 )
 
             start = max(
-                file_size - suffix_length,
+                file_size
+                - suffix_length,
                 0
             )
 
         if end_str:
 
-            end = int(end_str)
+            end = int(
+                end_str
+            )
 
         else:
 
             end = file_size - 1
 
         if start < 0:
+
             start = 0
 
         if end >= file_size:
+
             end = file_size - 1
 
-        if start > end or start >= file_size:
+        if (
+            start > end
+            or start >= file_size
+        ):
 
             return Response(
                 status_code=416,
@@ -415,11 +1673,17 @@ def get_video(
                 "rb"
             ) as video_file:
 
-                video_file.seek(start)
+                video_file.seek(
+                    start
+                )
 
-                remaining = content_length
+                remaining = (
+                    content_length
+                )
 
-                chunk_size = 1024 * 1024
+                chunk_size = (
+                    1024 * 1024
+                )
 
                 while remaining > 0:
 
@@ -428,14 +1692,19 @@ def get_video(
                         remaining
                     )
 
-                    chunk = video_file.read(
-                        read_size
+                    chunk = (
+                        video_file.read(
+                            read_size
+                        )
                     )
 
                     if not chunk:
+
                         break
 
-                    remaining -= len(chunk)
+                    remaining -= (
+                        len(chunk)
+                    )
 
                     yield chunk
 
@@ -448,7 +1717,10 @@ def get_video(
                     str(content_length),
 
                 "Content-Range":
-                    f"bytes {start}-{end}/{file_size}",
+                    (
+                        f"bytes {start}-"
+                        f"{end}/{file_size}"
+                    ),
 
                 "Accept-Ranges":
                     "bytes",
@@ -493,36 +1765,56 @@ def create_multipart_body(
         (
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; '
-            f'name="file"; filename="{filename}"\r\n'
+            f'name="file"; '
+            f'filename="{filename}"\r\n'
             f"Content-Type: audio/mpeg\r\n"
             f"\r\n"
-        ).encode("utf-8")
-    )
-
-    body.extend(file_data)
-    body.extend(b"\r\n")
-
-    body.extend(
-        (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="text"\r\n'
-            f"\r\n"
-        ).encode("utf-8")
-    )
-
-    body.extend(
-        text.encode("utf-8")
-    )
-
-    body.extend(b"\r\n")
-
-    body.extend(
-        f"--{boundary}--\r\n".encode(
+        ).encode(
             "utf-8"
         )
     )
 
-    return bytes(body), boundary
+    body.extend(
+        file_data
+    )
+
+    body.extend(
+        b"\r\n"
+    )
+
+    body.extend(
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; '
+            f'name="text"\r\n'
+            f"\r\n"
+        ).encode(
+            "utf-8"
+        )
+    )
+
+    body.extend(
+        text.encode(
+            "utf-8"
+        )
+    )
+
+    body.extend(
+        b"\r\n"
+    )
+
+    body.extend(
+        (
+            f"--{boundary}--\r\n"
+        ).encode(
+            "utf-8"
+        )
+    )
+
+    return (
+        bytes(body),
+        boundary
+    )
 
 
 # ============================================================
@@ -548,14 +1840,19 @@ def get_forced_alignment(
 
         audio_data = f.read()
 
-    body, boundary = create_multipart_body(
-        audio_data,
-        os.path.basename(audio_path),
-        text
+    body, boundary = (
+        create_multipart_body(
+            audio_data,
+            os.path.basename(
+                audio_path
+            ),
+            text
+        )
     )
 
     url = (
-        "https://api.elevenlabs.io/v1/forced-alignment"
+        "https://api.elevenlabs.io/"
+        "v1/forced-alignment"
     )
 
     request = urllib.request.Request(
@@ -571,7 +1868,10 @@ def get_forced_alignment(
 
     request.add_header(
         "Content-Type",
-        f"multipart/form-data; boundary={boundary}"
+        (
+            "multipart/form-data; "
+            f"boundary={boundary}"
+        )
     )
 
     request.add_header(
@@ -586,30 +1886,39 @@ def get_forced_alignment(
             timeout=120
         ) as response:
 
-            response_data = response.read()
+            response_data = (
+                response.read()
+            )
 
         return json.loads(
-            response_data.decode("utf-8")
+            response_data.decode(
+                "utf-8"
+            )
         )
 
     except urllib.error.HTTPError as e:
 
-        error_body = e.read().decode(
-            "utf-8",
-            errors="replace"
+        error_body = (
+            e.read()
+            .decode(
+                "utf-8",
+                errors="replace"
+            )
         )
 
         raise Exception(
-            "ElevenLabs Forced Alignment "
-            f"error {e.code}: "
+            "ElevenLabs Forced "
+            "Alignment error "
+            f"{e.code}: "
             f"{error_body[-3000:]}"
         )
 
     except Exception as e:
 
         raise Exception(
-            "No se pudo obtener la "
-            f"sincronización de ElevenLabs: {e}"
+            "No se pudo obtener "
+            "la sincronización de "
+            f"ElevenLabs: {e}"
         )
 
 
@@ -617,7 +1926,9 @@ def get_forced_alignment(
 # TIEMPOS SRT
 # ============================================================
 
-def format_srt_time(seconds):
+def format_srt_time(
+    seconds
+):
 
     milliseconds = int(
         round(
@@ -625,20 +1936,30 @@ def format_srt_time(seconds):
         )
     )
 
-    total_seconds = int(seconds)
+    total_seconds = int(
+        seconds
+    )
 
     if milliseconds >= 1000:
 
         milliseconds = 0
+
         total_seconds += 1
 
-    hours = total_seconds // 3600
+    hours = (
+        total_seconds
+        // 3600
+    )
 
     minutes = (
-        total_seconds % 3600
+        total_seconds
+        % 3600
     ) // 60
 
-    secs = total_seconds % 60
+    secs = (
+        total_seconds
+        % 60
+    )
 
     return (
         f"{hours:02d}:"
@@ -649,7 +1970,7 @@ def format_srt_time(seconds):
 
 
 # ============================================================
-# CREAR SUBTÍTULOS SINCRONIZADOS
+# CREAR SUBTÍTULOS
 # ============================================================
 
 def create_srt_from_alignment(
@@ -672,12 +1993,17 @@ def create_srt_from_alignment(
     subtitles = []
 
     current_words = []
+
     current_start = None
+
     current_end = None
+
     current_chars = 0
+
     previous_end = None
 
     MAX_WORDS = 7
+
     MAX_CHARS = 42
 
     for word_data in words:
@@ -690,6 +2016,7 @@ def create_srt_from_alignment(
         ).strip()
 
         if not word:
+
             continue
 
         start = float(
@@ -719,7 +2046,8 @@ def create_srt_from_alignment(
         large_pause = (
             previous_end is not None
             and (
-                start - previous_end
+                start
+                - previous_end
                 >= 0.45
             )
         )
@@ -748,8 +2076,11 @@ def create_srt_from_alignment(
             )
 
             current_words = []
+
             current_start = None
+
             current_end = None
+
             current_chars = 0
 
         if current_start is None:
@@ -767,7 +2098,8 @@ def create_srt_from_alignment(
             + len(word)
             + (
                 1
-                if len(current_words) > 1
+                if len(current_words)
+                > 1
                 else 0
             )
         )
@@ -816,7 +2148,7 @@ def create_srt_from_alignment(
 
 
 # ============================================================
-# DURACIÓN DE AUDIO
+# DURACIÓN AUDIO
 # ============================================================
 
 def get_audio_duration(
@@ -831,7 +2163,11 @@ def get_audio_duration(
             "-show_entries",
             "format=duration",
             "-of",
-            "default=noprint_wrappers=1:nokey=1",
+            (
+                "default="
+                "noprint_wrappers=1:"
+                "nokey=1"
+            ),
             audio_path
         ],
         capture_output=True,
@@ -842,8 +2178,8 @@ def get_audio_duration(
     if result.returncode != 0:
 
         raise Exception(
-            "No se pudo obtener la duración "
-            "del audio: "
+            "No se pudo obtener "
+            "la duración del audio: "
             + result.stderr[-2000:]
         )
 
@@ -853,7 +2189,7 @@ def get_audio_duration(
 
 
 # ============================================================
-# DURACIÓN DE VIDEO
+# DURACIÓN VIDEO
 # ============================================================
 
 def get_video_duration(
@@ -868,7 +2204,11 @@ def get_video_duration(
             "-show_entries",
             "format=duration",
             "-of",
-            "default=noprint_wrappers=1:nokey=1",
+            (
+                "default="
+                "noprint_wrappers=1:"
+                "nokey=1"
+            ),
             video_path
         ],
         capture_output=True,
@@ -879,8 +2219,8 @@ def get_video_duration(
     if result.returncode != 0:
 
         raise Exception(
-            "No se pudo obtener la duración "
-            "del video: "
+            "No se pudo obtener "
+            "la duración del video: "
             + result.stderr[-2000:]
         )
 
@@ -890,7 +2230,7 @@ def get_video_duration(
 
 
 # ============================================================
-# PROCESAMIENTO EN SEGUNDO PLANO
+# PROCESAMIENTO BACKGROUND
 # ============================================================
 
 def process_video_background(
@@ -902,22 +2242,29 @@ def process_video_background(
     subtitle_text
 ):
 
-    state = load_job_state(
-        job_id
-    ) or {}
+    state = (
+        load_job_state(
+            job_id
+        )
+        or {}
+    )
 
     try:
 
-        state["status"] = "processing"
+        state["status"] = (
+            "processing"
+        )
 
         save_job_state(
             job_id,
             state
         )
 
-        alignment = get_forced_alignment(
-            voice_path,
-            subtitle_text
+        alignment = (
+            get_forced_alignment(
+                voice_path,
+                subtitle_text
+            )
         )
 
         srt_path = os.path.join(
@@ -930,12 +2277,16 @@ def process_video_background(
             srt_path
         )
 
-        voice_duration = get_audio_duration(
-            voice_path
+        voice_duration = (
+            get_audio_duration(
+                voice_path
+            )
         )
 
-        video_duration = get_video_duration(
-            input_path
+        video_duration = (
+            get_video_duration(
+                input_path
+            )
         )
 
         state["voice_duration"] = (
@@ -953,9 +2304,18 @@ def process_video_background(
 
         subtitle_filter_path = (
             srt_path
-            .replace("\\", "/")
-            .replace(":", "\\:")
-            .replace("'", "\\'")
+            .replace(
+                "\\",
+                "/"
+            )
+            .replace(
+                ":",
+                "\\:"
+            )
+            .replace(
+                "'",
+                "\\'"
+            )
         )
 
         filter_complex = (
@@ -1035,7 +2395,9 @@ def process_video_background(
                 "128k",
 
                 "-t",
-                str(voice_duration),
+                str(
+                    voice_duration
+                ),
 
                 "-movflags",
                 "+faststart",
@@ -1049,13 +2411,14 @@ def process_video_background(
 
         if result.returncode != 0:
 
-            error_message = (
+            state["status"] = (
+                "error"
+            )
+
+            state["error"] = (
                 "FFmpeg error:\n"
                 + result.stderr[-5000:]
             )
-
-            state["status"] = "error"
-            state["error"] = error_message
 
             save_job_state(
                 job_id,
@@ -1068,7 +2431,10 @@ def process_video_background(
             output_path
         ):
 
-            state["status"] = "error"
+            state["status"] = (
+                "error"
+            )
+
             state["error"] = (
                 "FFmpeg no generó "
                 "el video"
@@ -1085,12 +2451,16 @@ def process_video_background(
             output_path
         )
 
-        state["status"] = "completed"
+        state["status"] = (
+            "completed"
+        )
 
-        state["filename"] = filename
+        state["filename"] = (
+            filename
+        )
 
         state["download_url"] = (
-            "https://resina-video-server.onrender.com"
+            f"{BASE_URL}"
             f"/video/{filename}"
         )
 
@@ -1103,7 +2473,9 @@ def process_video_background(
 
     except subprocess.TimeoutExpired:
 
-        state["status"] = "error"
+        state["status"] = (
+            "error"
+        )
 
         state["error"] = (
             "FFmpeg superó "
@@ -1117,9 +2489,13 @@ def process_video_background(
 
     except Exception as e:
 
-        state["status"] = "error"
+        state["status"] = (
+            "error"
+        )
 
-        state["error"] = str(e)
+        state["error"] = str(
+            e
+        )
 
         save_job_state(
             job_id,
@@ -1131,7 +2507,9 @@ def process_video_background(
 # PROCESS VIDEO
 # ============================================================
 
-@app.post("/process_video")
+@app.post(
+    "/process_video"
+)
 async def process_video(
     video: UploadFile = File(...),
     voice: UploadFile = File(...),
@@ -1172,14 +2550,19 @@ async def process_video(
 
             while True:
 
-                chunk = await video.read(
-                    1024 * 1024
+                chunk = (
+                    await video.read(
+                        1024 * 1024
+                    )
                 )
 
                 if not chunk:
+
                     break
 
-                f.write(chunk)
+                f.write(
+                    chunk
+                )
 
         with open(
             voice_path,
@@ -1188,14 +2571,19 @@ async def process_video(
 
             while True:
 
-                chunk = await voice.read(
-                    1024 * 1024
+                chunk = (
+                    await voice.read(
+                        1024 * 1024
+                    )
                 )
 
                 if not chunk:
+
                     break
 
-                f.write(chunk)
+                f.write(
+                    chunk
+                )
 
         urllib.request.urlretrieve(
             background,
@@ -1230,7 +2618,8 @@ async def process_video(
         save_job_state(
             job_id,
             {
-                "status": "queued"
+                "status":
+                    "queued"
             }
         )
 
@@ -1251,8 +2640,10 @@ async def process_video(
 
         return {
             "success": True,
-            "job_id": job_id,
-            "status": "processing"
+            "job_id":
+                job_id,
+            "status":
+                "processing"
         }
 
     except Exception as e:
@@ -1260,24 +2651,31 @@ async def process_video(
         save_job_state(
             job_id,
             {
-                "status": "error",
-                "error": str(e)
+                "status":
+                    "error",
+                "error":
+                    str(e)
             }
         )
 
         return {
             "success": False,
-            "job_id": job_id,
-            "status": "error",
-            "error": str(e)
+            "job_id":
+                job_id,
+            "status":
+                "error",
+            "error":
+                str(e)
         }
 
 
 # ============================================================
-# STATUS
+# STATUS VIDEO
 # ============================================================
 
-@app.get("/status/{job_id}")
+@app.get(
+    "/status/{job_id}"
+)
 def get_status(
     job_id: str
 ):
@@ -1315,12 +2713,17 @@ def get_status(
         )
 
         recovered_state = {
-            "status": "completed",
-            "filename": filename,
-            "download_url": (
-                "https://resina-video-server.onrender.com"
-                f"/video/{filename}"
-            )
+            "status":
+                "completed",
+
+            "filename":
+                filename,
+
+            "download_url":
+                (
+                    f"{BASE_URL}"
+                    f"/video/{filename}"
+                )
         }
 
         if state:
@@ -1333,41 +2736,64 @@ def get_status(
 
                 if key in state:
 
-                    recovered_state[key] = (
-                        state[key]
-                    )
+                    recovered_state[
+                        key
+                    ] = state[key]
 
         return {
-            "success": True,
-            "job_id": job_id,
+            "success":
+                True,
+
+            "job_id":
+                job_id,
+
             **recovered_state
         }
 
     if (
-        os.path.isfile(input_path)
-        and os.path.isfile(voice_path)
-        and os.path.isfile(background_path)
+        os.path.isfile(
+            input_path
+        )
+        and os.path.isfile(
+            voice_path
+        )
+        and os.path.isfile(
+            background_path
+        )
     ):
 
         if state:
 
             return {
-                "success": True,
-                "job_id": job_id,
+                "success":
+                    True,
+
+                "job_id":
+                    job_id,
+
                 **state
             }
 
         return {
-            "success": True,
-            "job_id": job_id,
-            "status": "processing"
+            "success":
+                True,
+
+            "job_id":
+                job_id,
+
+            "status":
+                "processing"
         }
 
     if state:
 
         return {
-            "success": True,
-            "job_id": job_id,
+            "success":
+                True,
+
+            "job_id":
+                job_id,
+
             **state
         }
 
