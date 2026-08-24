@@ -1754,6 +1754,13 @@ def process_video_background(
             subtitle_text
         )
 
+        state["stage"] = "subtitles"
+
+        save_job_state(
+            job_id,
+            state
+        )
+
         srt_path = os.path.join(
             VIDEO_DIR,
             f"{job_id}.srt"
@@ -2055,16 +2062,14 @@ async def process_video(
 # STATUS VIDEO
 #
 # IMPORTANTE:
-# Este endpoint ahora puede esperar internamente a que FFmpeg
-# termine. Así Make no necesita hacer varios reintentos.
+# Este endpoint responde inmediatamente.
+# Make hará el polling mediante Sleep + HTTP 6.
 #
-# El HTTP 6 debe usar:
-#   GET /status/{job_id}
-#
-# El endpoint espera hasta 240 segundos como máximo.
-# Si FFmpeg termina antes, devuelve inmediatamente "completed".
-# Si FFmpeg falla, devuelve "error".
-# Si supera el tiempo máximo, devuelve "processing".
+# Estados:
+#   queued
+#   processing
+#   completed
+#   error
 # ============================================================
 
 @app.get(
@@ -2079,222 +2084,119 @@ def get_status(
         f"{job_id}_processed.mp4"
     )
 
-    input_path = os.path.join(
-        VIDEO_DIR,
-        f"{job_id}_input.mp4"
-    )
-
-    voice_path = os.path.join(
-        VIDEO_DIR,
-        f"{job_id}_voice.mp3"
-    )
-
-    background_path = os.path.join(
-        VIDEO_DIR,
-        f"{job_id}_background.mp3"
+    state = load_job_state(
+        job_id
     )
 
     # --------------------------------------------------------
-    # Espera interna:
-    #
-    # 240 segundos = 4 minutos.
-    # Revisamos cada 5 segundos.
-    #
-    # Esto evita que Make tenga que hacer:
-    # Sleep -> HTTP 6 -> Sleep -> HTTP 6...
+    # Si existe el archivo final, validarlo y devolver
+    # completed inmediatamente.
     # --------------------------------------------------------
 
-    max_wait_seconds = 240
-    poll_interval_seconds = 5
+    if os.path.isfile(
+        output_path
+    ):
 
-    started_waiting = time.time()
+        try:
 
-    while True:
-
-        state = load_job_state(
-            job_id
-        )
-
-        # ----------------------------------------------------
-        # 1. Si el MP4 final existe, validarlo.
-        # ----------------------------------------------------
-
-        if os.path.isfile(
-            output_path
-        ):
-
-            try:
-
-                validation = (
-                    validate_output_video(
-                        output_path
-                    )
+            validation = (
+                validate_output_video(
+                    output_path
                 )
-
-            except Exception as validation_error:
-
-                if state is None:
-
-                    state = {}
-
-                state["status"] = (
-                    "error"
-                )
-
-                state["stage"] = (
-                    "validation"
-                )
-
-                state["error"] = (
-                    "El MP4 existente no pasó "
-                    "la validación: "
-                    + str(validation_error)
-                )
-
-                save_job_state(
-                    job_id,
-                    state
-                )
-
-                return {
-                    "success":
-                        True,
-
-                    "job_id":
-                        job_id,
-
-                    **state
-                }
-
-            filename = os.path.basename(
-                output_path
             )
 
-            recovered_state = {
-                "status":
-                    "completed",
+        except Exception as validation_error:
 
-                "stage":
-                    "completed",
+            if state is None:
+                state = {}
 
-                "filename":
-                    filename,
+            state["status"] = "error"
+            state["stage"] = "validation"
+            state["error"] = (
+                "El MP4 existente no pasó "
+                "la validación: "
+                + str(validation_error)
+            )
 
-                "download_url":
-                    (
-                        f"{BASE_URL}"
-                        f"/video/{filename}"
-                    ),
-
-                "output_size":
-                    validation["size"],
-
-                "output_duration":
-                    validation["duration"],
-
-                "output_format":
-                    validation["format"],
-
-                "output_video_codec":
-                    validation["video_codecs"],
-
-                "output_audio_codec":
-                    validation["audio_codecs"]
-            }
-
-            if state:
-
-                for key in [
-                    "voice_duration",
-                    "video_duration",
-                    "alignment"
-                ]:
-
-                    if key in state:
-
-                        recovered_state[
-                            key
-                        ] = state[key]
+            save_job_state(
+                job_id,
+                state
+            )
 
             return {
-                "success":
-                    True,
-
-                "job_id":
-                    job_id,
-
-                **recovered_state
+                "success": True,
+                "job_id": job_id,
+                **state
             }
 
-        # ----------------------------------------------------
-        # 2. Si el procesamiento terminó con error,
-        #    no debemos seguir esperando.
-        # ----------------------------------------------------
+        filename = os.path.basename(
+            output_path
+        )
+
+        result = {
+            "success": True,
+            "job_id": job_id,
+            "status": "completed",
+            "stage": "completed",
+            "filename": filename,
+            "download_url": (
+                f"{BASE_URL}"
+                f"/video/{filename}"
+            ),
+            "output_size": validation["size"],
+            "output_duration": validation["duration"],
+            "output_format": validation["format"],
+            "output_video_codec":
+                validation["video_codecs"],
+            "output_audio_codec":
+                validation["audio_codecs"]
+        }
 
         if state:
 
-            current_status = state.get(
-                "status"
-            )
+            for key in [
+                "voice_duration",
+                "video_duration",
+                "alignment"
+            ]:
 
-            if current_status == "error":
+                if key in state:
+                    result[key] = state[key]
 
-                return {
-                    "success":
-                        True,
+        return result
 
-                    "job_id":
-                        job_id,
+    # --------------------------------------------------------
+    # Si no hay estado, el job no existe.
+    # --------------------------------------------------------
 
-                    **state
-                }
+    if not state:
 
-        # ----------------------------------------------------
-        # 3. Si todavía está procesando, esperamos.
-        # ----------------------------------------------------
-
-        if (
-            time.time()
-            - started_waiting
-            >= max_wait_seconds
-        ):
-
-            if state:
-
-                return {
-                    "success":
-                        True,
-
-                    "job_id":
-                        job_id,
-
-                    **state
-                }
-
-            return {
-                "success":
-                    True,
-
-                "job_id":
-                    job_id,
-
-                "status":
-                    "processing",
-
-                "stage":
-                    "ffmpeg",
-
-                "message":
-                    (
-                        "El procesamiento todavía "
-                        "está en curso después de "
-                        f"{max_wait_seconds} segundos."
-                    )
-            }
-
-        time.sleep(
-            poll_interval_seconds
+        raise HTTPException(
+            status_code=404,
+            detail="Job no encontrado"
         )
+
+    # --------------------------------------------------------
+    # Si hubo error, devolverlo inmediatamente.
+    # --------------------------------------------------------
+
+    if state.get("status") == "error":
+
+        return {
+            "success": True,
+            "job_id": job_id,
+            **state
+        }
+
+    # --------------------------------------------------------
+    # Todavía está trabajando.
+    # --------------------------------------------------------
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        **state
+    }
 
 
 
