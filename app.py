@@ -121,12 +121,6 @@ TIKTOK_SCOPES = (
 
 # ============================================================
 # TOKEN STORAGE
-#
-# Para pruebas dejamos los tokens en /tmp.
-#
-# IMPORTANTE:
-# /tmp puede desaparecer cuando Render reinicia el servicio.
-# Más adelante podemos pasar esto a una base de datos.
 # ============================================================
 
 TIKTOK_TOKEN_FILE = os.path.join(
@@ -137,8 +131,6 @@ TIKTOK_TOKEN_FILE = os.path.join(
 
 # ============================================================
 # OAUTH STATE
-#
-# Guardamos temporalmente los state generados.
 # ============================================================
 
 OAUTH_STATE_FILE = os.path.join(
@@ -151,11 +143,6 @@ OAUTH_STATE_FILE = os.path.join(
 # VERIFICACIÓN DE DOMINIO TIKTOK
 # ============================================================
 
-TIKTOK_VERIFICATION_FILE = (
-    "tiktokMBXNgoJHxI9pXWdcx90DU4Hgx7rg8RV.txt"
-)
-
-# El nombre correcto según tu código original:
 TIKTOK_VERIFICATION_FILE = (
     "tiktokMBXNgoJHxI9pXwUdcx90DU4Hgx7rg8RV.txt"
 )
@@ -179,7 +166,9 @@ def tiktok_verification():
 # ESTADO DE JOBS
 # ============================================================
 
-def job_state_path(job_id):
+def job_state_path(
+    job_id
+):
 
     return os.path.join(
         VIDEO_DIR,
@@ -340,7 +329,6 @@ def save_oauth_state(
         time.time()
     )
 
-    # Limpiar states antiguos
     now = int(
         time.time()
     )
@@ -844,7 +832,6 @@ def get_tiktok_access_token():
         )
     )
 
-    # Refrescar 10 minutos antes
     if (
         time.time()
         >= saved_at
@@ -864,8 +851,6 @@ def get_tiktok_access_token():
 
         except Exception:
 
-            # Si todavía funciona,
-            # devolvemos el actual.
             return access_token
 
     return access_token
@@ -1077,11 +1062,6 @@ def tiktok_creator_info():
 
 # ============================================================
 # PUBLICAR VIDEO A TIKTOK
-#
-# Usa PULL_FROM_URL.
-#
-# TikTok descarga directamente el MP4
-# desde nuestro dominio verificado.
 # ============================================================
 
 class TikTokPublishRequest(
@@ -1441,14 +1421,17 @@ def download_video(
             files[0]
         )
 
+        video_url = (
+            f"{BASE_URL}"
+            f"/video/{filename}"
+        )
+
         return {
             "success": True,
             "job_id": job_id,
             "filename": filename,
-            "download_url": (
-                f"{BASE_URL}"
-                f"/video/{filename}"
-            )
+            "download_url": video_url,
+            "video_url": video_url
         }
 
     except subprocess.TimeoutExpired:
@@ -2454,8 +2437,6 @@ def cleanup_old_video_files(
 
             except Exception:
 
-                # Un archivo concreto no debe
-                # impedir el procesamiento.
                 continue
 
     except Exception:
@@ -2463,8 +2444,6 @@ def cleanup_old_video_files(
         pass
 
 
-# Limpiar residuos de ejecuciones
-# anteriores al iniciar el servidor.
 cleanup_old_video_files()
 
 
@@ -2589,17 +2568,11 @@ def process_video_background(
             "[video]"
         )
 
-        # FFmpeg escribe primero en un archivo temporal.
-        # Solo lo convertimos en _processed.mp4 después
-        # de validar que el contenedor, video y audio
-        # son realmente reproducibles.
         temp_output_path = (
             output_path
             + ".tmp.mp4"
         )
 
-        # Si quedó un temporal de un intento anterior,
-        # lo eliminamos antes de empezar.
         if os.path.isfile(
             temp_output_path
         ):
@@ -2736,9 +2709,6 @@ def process_video_background(
 
             return
 
-        # Reemplazo atómico: HTTP 6 solo podrá ver
-        # el nombre final cuando el archivo ya pasó
-        # todas las validaciones.
         os.replace(
             temp_output_path,
             output_path
@@ -2746,6 +2716,15 @@ def process_video_background(
 
         filename = os.path.basename(
             output_path
+        )
+
+        # ====================================================
+        # URL FINAL DEL VIDEO
+        # ====================================================
+
+        video_url = (
+            f"{BASE_URL}"
+            f"/video/{filename}"
         )
 
         state["status"] = (
@@ -2756,9 +2735,14 @@ def process_video_background(
             filename
         )
 
+        # Mantener download_url por compatibilidad
         state["download_url"] = (
-            f"{BASE_URL}"
-            f"/video/{filename}"
+            video_url
+        )
+
+        # NUEVO CAMPO PRINCIPAL
+        state["video_url"] = (
+            video_url
         )
 
         state["alignment"] = True
@@ -2788,7 +2772,6 @@ def process_video_background(
             state
         )
 
-        # Limpiamos archivos de más de 24 horas.
         cleanup_old_video_files()
 
     except subprocess.TimeoutExpired:
@@ -2991,6 +2974,18 @@ async def process_video(
 
 # ============================================================
 # STATUS VIDEO
+#
+# IMPORTANTE:
+#
+# processing:
+#   NO devuelve video_url.
+#
+# completed:
+#   devuelve video_url.
+#
+# Esto permite que el Router de Make
+# solo mande el video a YouTube/Instagram
+# cuando realmente terminó.
 # ============================================================
 
 @app.get(
@@ -3024,6 +3019,10 @@ def get_status(
         job_id
     )
 
+    # ========================================================
+    # VIDEO TERMINADO
+    # ========================================================
+
     if os.path.isfile(
         output_path
     ):
@@ -3038,9 +3037,6 @@ def get_status(
 
         except Exception as validation_error:
 
-            # Si por alguna razón existe un archivo
-            # final inválido, no debemos reportarlo como
-            # completed ni entregarlo a Make.
             if state is None:
 
                 state = {}
@@ -3053,6 +3049,19 @@ def get_status(
                 "El MP4 existente no pasó "
                 "la validación: "
                 + str(validation_error)
+            )
+
+            # Si había una URL anterior,
+            # la eliminamos para evitar que
+            # Make intente utilizar un archivo inválido.
+            state.pop(
+                "video_url",
+                None
+            )
+
+            state.pop(
+                "download_url",
+                None
             )
 
             save_job_state(
@@ -3074,6 +3083,15 @@ def get_status(
             output_path
         )
 
+        # ====================================================
+        # ESTA ES LA URL QUE NECESITA MAKE
+        # ====================================================
+
+        video_url = (
+            f"{BASE_URL}"
+            f"/video/{filename}"
+        )
+
         recovered_state = {
             "status":
                 "completed",
@@ -3081,11 +3099,14 @@ def get_status(
             "filename":
                 filename,
 
+            # Campo compatible anterior
             "download_url":
-                (
-                    f"{BASE_URL}"
-                    f"/video/{filename}"
-                ),
+                video_url,
+
+            # Campo nuevo que utilizará
+            # YouTube / Instagram
+            "video_url":
+                video_url,
 
             "output_size":
                 validation["size"],
@@ -3117,6 +3138,22 @@ def get_status(
                         key
                     ] = state[key]
 
+        # Guardamos también el video_url
+        # en el archivo de estado para que
+        # futuras consultas sean consistentes.
+        final_state = dict(
+            state or {}
+        )
+
+        final_state.update(
+            recovered_state
+        )
+
+        save_job_state(
+            job_id,
+            final_state
+        )
+
         return {
             "success":
                 True,
@@ -3126,6 +3163,10 @@ def get_status(
 
             **recovered_state
         }
+
+    # ========================================================
+    # VIDEO TODAVÍA PROCESÁNDOSE
+    # ========================================================
 
     if (
         os.path.isfile(
@@ -3141,6 +3182,27 @@ def get_status(
 
         if state:
 
+            # Nos aseguramos de que mientras
+            # no esté completado no exista
+            # un video_url utilizable.
+            processing_state = dict(
+                state
+            )
+
+            if processing_state.get(
+                "status"
+            ) != "completed":
+
+                processing_state.pop(
+                    "video_url",
+                    None
+                )
+
+                processing_state.pop(
+                    "download_url",
+                    None
+                )
+
             return {
                 "success":
                     True,
@@ -3148,7 +3210,7 @@ def get_status(
                 "job_id":
                     job_id,
 
-                **state
+                **processing_state
             }
 
         return {
@@ -3162,7 +3224,31 @@ def get_status(
                 "processing"
         }
 
+    # ========================================================
+    # JOB CON ESTADO PERO SIN ARCHIVOS
+    # ========================================================
+
     if state:
+
+        # Si todavía no está completado,
+        # jamás enviamos video_url.
+        if state.get(
+            "status"
+        ) != "completed":
+
+            state = dict(
+                state
+            )
+
+            state.pop(
+                "video_url",
+                None
+            )
+
+            state.pop(
+                "download_url",
+                None
+            )
 
         return {
             "success":
@@ -3173,6 +3259,10 @@ def get_status(
 
             **state
         }
+
+    # ========================================================
+    # JOB NO EXISTE
+    # ========================================================
 
     raise HTTPException(
         status_code=404,
