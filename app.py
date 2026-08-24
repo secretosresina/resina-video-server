@@ -27,13 +27,16 @@ import urllib.error
 import urllib.parse
 import json
 import time
+import signal
 
 
 # ============================================================
 # APP
 # ============================================================
 
-app = FastAPI(title="Resina Video Server")
+app = FastAPI(
+    title="Resina Video Server"
+)
 
 
 # ============================================================
@@ -46,26 +49,47 @@ BASE_URL = os.getenv(
 ).rstrip("/")
 
 VIDEO_DIR = "/tmp/videos"
-os.makedirs(VIDEO_DIR, exist_ok=True)
 
-# Evita que dos procesos de limpieza/procesamiento borren
-# archivos mientras están siendo usados.
-FILE_LOCK = threading.Lock()
+os.makedirs(
+    VIDEO_DIR,
+    exist_ok=True
+)
+
+# Tiempo máximo permitido para FFmpeg.
+# Si supera este tiempo, el proceso se mata y el job
+# queda en status=error.
+FFMPEG_TIMEOUT = int(
+    os.getenv(
+        "FFMPEG_TIMEOUT",
+        "300"
+    )
+)
+
+# Cada cuántos segundos actualizamos información de FFmpeg
+# en el estado del job.
+FFMPEG_LOG_UPDATE_SECONDS = 5
 
 
 # ============================================================
 # ELEVENLABS
 # ============================================================
 
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_API_KEY = os.getenv(
+    "ELEVENLABS_API_KEY"
+)
 
 
 # ============================================================
 # TIKTOK
 # ============================================================
 
-TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY")
-TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET")
+TIKTOK_CLIENT_KEY = os.getenv(
+    "TIKTOK_CLIENT_KEY"
+)
+
+TIKTOK_CLIENT_SECRET = os.getenv(
+    "TIKTOK_CLIENT_SECRET"
+)
 
 TIKTOK_REDIRECT_URI = os.getenv(
     "TIKTOK_REDIRECT_URI",
@@ -85,25 +109,32 @@ TIKTOK_USER_INFO_URL = (
 )
 
 TIKTOK_CREATOR_INFO_URL = (
-    "https://open.tiktokapis.com/v2/post/publish/"
-    "creator_info/query/"
+    "https://open.tiktokapis.com/v2/post/publish/creator_info/query/"
 )
 
 TIKTOK_PUBLISH_URL = (
-    "https://open.tiktokapis.com/v2/post/publish/"
-    "video/init/"
+    "https://open.tiktokapis.com/v2/post/publish/video/init/"
 )
 
 TIKTOK_STATUS_URL = (
-    "https://open.tiktokapis.com/v2/post/publish/"
-    "status/fetch/"
+    "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
 )
+
+
+# ============================================================
+# TIKTOK SCOPES
+# ============================================================
 
 TIKTOK_SCOPES = (
     "user.info.basic,"
     "video.publish,"
     "video.upload"
 )
+
+
+# ============================================================
+# TOKEN STORAGE
+# ============================================================
 
 TIKTOK_TOKEN_FILE = os.path.join(
     VIDEO_DIR,
@@ -117,7 +148,7 @@ OAUTH_STATE_FILE = os.path.join(
 
 
 # ============================================================
-# TIKTOK DOMAIN VERIFICATION
+# VERIFICACIÓN DE DOMINIO TIKTOK
 # ============================================================
 
 TIKTOK_VERIFICATION_FILE = (
@@ -139,7 +170,7 @@ def tiktok_verification():
 
 
 # ============================================================
-# JOB STATE
+# ESTADO DE JOBS
 # ============================================================
 
 def job_state_path(job_id):
@@ -161,10 +192,14 @@ def save_job_state(job_id, data):
         json.dump(
             data,
             f,
-            ensure_ascii=False
+            ensure_ascii=False,
+            indent=2
         )
 
-    os.replace(temp_path, path)
+    os.replace(
+        temp_path,
+        path
+    )
 
 
 def load_job_state(job_id):
@@ -180,8 +215,24 @@ def load_job_state(job_id):
             encoding="utf-8"
         ) as f:
             return json.load(f)
+
     except Exception:
         return None
+
+
+def update_job_state(job_id, **updates):
+    state = load_job_state(job_id) or {}
+    state.update(updates)
+
+    try:
+        save_job_state(
+            job_id,
+            state
+        )
+    except Exception:
+        pass
+
+    return state
 
 
 # ============================================================
@@ -191,9 +242,14 @@ def load_job_state(job_id):
 def save_tiktok_tokens(token_data):
     data = dict(token_data)
 
-    data["saved_at"] = int(time.time())
+    data["saved_at"] = int(
+        time.time()
+    )
 
-    temp_path = TIKTOK_TOKEN_FILE + ".tmp"
+    temp_path = (
+        TIKTOK_TOKEN_FILE
+        + ".tmp"
+    )
 
     with open(
         temp_path,
@@ -226,12 +282,13 @@ def load_tiktok_tokens():
             encoding="utf-8"
         ) as f:
             return json.load(f)
+
     except Exception:
         return None
 
 
 # ============================================================
-# OAUTH STATE
+# OAUTH STATE STORAGE
 # ============================================================
 
 def save_oauth_state(state):
@@ -247,27 +304,38 @@ def save_oauth_state(state):
                 encoding="utf-8"
             ) as f:
                 states = json.load(f)
+
         except Exception:
             states = {}
 
-    states[state] = int(time.time())
+    states[state] = int(
+        time.time()
+    )
 
-    now = int(time.time())
+    now = int(
+        time.time()
+    )
 
     states = {
         key: value
         for key, value in states.items()
-        if now - value < 600
+        if now - int(value) < 600
     }
 
-    temp_path = OAUTH_STATE_FILE + ".tmp"
+    temp_path = (
+        OAUTH_STATE_FILE
+        + ".tmp"
+    )
 
     with open(
         temp_path,
         "w",
         encoding="utf-8"
     ) as f:
-        json.dump(states, f)
+        json.dump(
+            states,
+            f
+        )
 
     os.replace(
         temp_path,
@@ -288,6 +356,7 @@ def consume_oauth_state(state):
             encoding="utf-8"
         ) as f:
             states = json.load(f)
+
     except Exception:
         return False
 
@@ -302,7 +371,11 @@ def consume_oauth_state(state):
             "w",
             encoding="utf-8"
         ) as f:
-            json.dump(states, f)
+            json.dump(
+                states,
+                f
+            )
+
     except Exception:
         pass
 
@@ -320,17 +393,19 @@ def consume_oauth_state(state):
 
 
 # ============================================================
-# TIKTOK OAUTH LOGIN
+# TIKTOK OAUTH - LOGIN
 # ============================================================
 
 @app.get("/tiktok/login")
 def tiktok_login():
+
     if not TIKTOK_CLIENT_KEY:
         raise HTTPException(
             status_code=500,
             detail=(
                 "Falta TIKTOK_CLIENT_KEY "
-                "en las variables de entorno de Render."
+                "en las variables de entorno "
+                "de Render."
             )
         )
 
@@ -339,11 +414,13 @@ def tiktok_login():
             status_code=500,
             detail=(
                 "Falta TIKTOK_CLIENT_SECRET "
-                "en las variables de entorno de Render."
+                "en las variables de entorno "
+                "de Render."
             )
         )
 
     state = uuid.uuid4().hex
+
     save_oauth_state(state)
 
     params = {
@@ -351,7 +428,7 @@ def tiktok_login():
         "response_type": "code",
         "scope": TIKTOK_SCOPES,
         "redirect_uri": TIKTOK_REDIRECT_URI,
-        "state": state
+        "state": state,
     }
 
     authorize_url = (
@@ -367,7 +444,7 @@ def tiktok_login():
 
 
 # ============================================================
-# TIKTOK OAUTH CALLBACK
+# TIKTOK OAUTH - CALLBACK
 # ============================================================
 
 @app.get("/tiktok/callback")
@@ -377,6 +454,7 @@ def tiktok_callback(
     error: str = None,
     error_description: str = None
 ):
+
     if error:
         return {
             "success": False,
@@ -400,7 +478,8 @@ def tiktok_callback(
             "success": False,
             "stage": "tiktok_callback",
             "error": (
-                "TikTok no devolvió state."
+                "TikTok no devolvió "
+                "state."
             )
         }
 
@@ -425,7 +504,9 @@ def tiktok_callback(
 
         return {
             "success": True,
-            "message": "TikTok conectado correctamente.",
+            "message": (
+                "TikTok conectado correctamente."
+            ),
             "open_id": token_data.get("open_id"),
             "scope": token_data.get("scope"),
             "user": user_data
@@ -440,15 +521,20 @@ def tiktok_callback(
 
 
 # ============================================================
-# TIKTOK TOKEN EXCHANGE
+# INTERCAMBIAR CODE POR TOKEN
 # ============================================================
 
 def exchange_code_for_token(code):
+
     if not TIKTOK_CLIENT_KEY:
-        raise Exception("Falta TIKTOK_CLIENT_KEY.")
+        raise Exception(
+            "Falta TIKTOK_CLIENT_KEY."
+        )
 
     if not TIKTOK_CLIENT_SECRET:
-        raise Exception("Falta TIKTOK_CLIENT_SECRET.")
+        raise Exception(
+            "Falta TIKTOK_CLIENT_SECRET."
+        )
 
     form_data = {
         "client_key": TIKTOK_CLIENT_KEY,
@@ -492,8 +578,8 @@ def exchange_code_for_token(code):
 
         if "access_token" not in data:
             raise Exception(
-                "TikTok no devolvió access_token: "
-                f"{data}"
+                "TikTok no devolvió "
+                f"access_token: {data}"
             )
 
         return data
@@ -508,16 +594,17 @@ def exchange_code_for_token(code):
         )
 
         raise Exception(
-            f"TikTok OAuth HTTP {e.code}: "
-            f"{error_body}"
+            "TikTok OAuth HTTP "
+            f"{e.code}: {error_body}"
         )
 
 
 # ============================================================
-# TIKTOK REFRESH TOKEN
+# REFRESCAR TOKEN TIKTOK
 # ============================================================
 
 def refresh_tiktok_token():
+
     tokens = load_tiktok_tokens()
 
     if not tokens:
@@ -573,13 +660,21 @@ def refresh_tiktok_token():
 
         if "access_token" not in new_tokens:
             raise Exception(
-                "TikTok no devolvió un nuevo "
-                f"access_token: {new_tokens}"
+                "TikTok no devolvió "
+                f"un nuevo access_token: "
+                f"{new_tokens}"
             )
 
-        save_tiktok_tokens(new_tokens)
+        # Algunos refresh responses pueden no repetir
+        # todos los campos. Conservamos los anteriores.
+        merged_tokens = dict(tokens)
+        merged_tokens.update(new_tokens)
 
-        return new_tokens
+        save_tiktok_tokens(
+            merged_tokens
+        )
+
+        return merged_tokens
 
     except urllib.error.HTTPError as e:
         error_body = (
@@ -591,16 +686,18 @@ def refresh_tiktok_token():
         )
 
         raise Exception(
-            f"Error refrescando token TikTok "
-            f"HTTP {e.code}: {error_body}"
+            "Error refrescando token "
+            f"TikTok HTTP {e.code}: "
+            f"{error_body}"
         )
 
 
 # ============================================================
-# TIKTOK ACCESS TOKEN
+# OBTENER TOKEN ACTUAL
 # ============================================================
 
 def get_tiktok_access_token():
+
     tokens = load_tiktok_tokens()
 
     if not tokens:
@@ -634,7 +731,9 @@ def get_tiktok_access_token():
 
     if (
         time.time()
-        >= saved_at + expires_in - 600
+        >= saved_at
+        + expires_in
+        - 600
     ):
         try:
             refreshed = refresh_tiktok_token()
@@ -646,7 +745,7 @@ def get_tiktok_access_token():
 
 
 # ============================================================
-# TIKTOK JSON REQUEST
+# LLAMADA JSON GENÉRICA A TIKTOK
 # ============================================================
 
 def tiktok_json_request(
@@ -654,6 +753,7 @@ def tiktok_json_request(
     method="POST",
     payload=None
 ):
+
     access_token = get_tiktok_access_token()
 
     body = None
@@ -709,16 +809,16 @@ def tiktok_json_request(
 
 
 # ============================================================
-# TIKTOK USER
+# OBTENER INFORMACIÓN DEL USUARIO TIKTOK
 # ============================================================
 
 def get_tiktok_user(access_token):
+
     params = urllib.parse.urlencode(
         {
-            "fields": (
+            "fields":
                 "open_id,display_name,"
                 "avatar_url,profile_deep_link"
-            )
         }
     )
 
@@ -762,16 +862,26 @@ def get_tiktok_user(access_token):
         )
 
         raise Exception(
-            f"TikTok user info error {e.code}: "
-            f"{error_body}"
+            "TikTok user info error "
+            f"{e.code}: {error_body}"
         )
 
 
+# ============================================================
+# TEST TIKTOK
+# ============================================================
+
 @app.get("/tiktok/me")
 def tiktok_me():
+
     try:
-        access_token = get_tiktok_access_token()
-        data = get_tiktok_user(access_token)
+        access_token = (
+            get_tiktok_access_token()
+        )
+
+        data = get_tiktok_user(
+            access_token
+        )
 
         return {
             "success": True,
@@ -787,8 +897,13 @@ def tiktok_me():
         }
 
 
+# ============================================================
+# CREATOR INFO
+# ============================================================
+
 @app.get("/tiktok/creator-info")
 def tiktok_creator_info():
+
     try:
         data = tiktok_json_request(
             TIKTOK_CREATOR_INFO_URL,
@@ -809,7 +924,7 @@ def tiktok_creator_info():
 
 
 # ============================================================
-# TIKTOK PUBLISH
+# PUBLICAR VIDEO A TIKTOK
 # ============================================================
 
 class TikTokPublishRequest(BaseModel):
@@ -826,11 +941,13 @@ class TikTokPublishRequest(BaseModel):
 def tiktok_publish(
     data: TikTokPublishRequest
 ):
+
     if not data.video_url.startswith("https://"):
         raise HTTPException(
             status_code=400,
             detail=(
-                "video_url debe comenzar con https://"
+                "video_url debe comenzar "
+                "con https://"
             )
         )
 
@@ -838,8 +955,9 @@ def tiktok_publish(
         raise HTTPException(
             status_code=400,
             detail=(
-                "Por seguridad, el video debe estar "
-                f"alojado en {BASE_URL}"
+                "Por seguridad, el video "
+                "debe estar alojado en "
+                f"{BASE_URL}"
             )
         )
 
@@ -886,7 +1004,10 @@ def tiktok_publish(
             payload=payload
         )
 
-        error_data = result.get("error", {})
+        error_data = result.get(
+            "error",
+            {}
+        )
 
         if (
             error_data
@@ -917,7 +1038,7 @@ def tiktok_publish(
 
 
 # ============================================================
-# TIKTOK STATUS
+# ESTADO DE PUBLICACIÓN TIKTOK
 # ============================================================
 
 class TikTokStatusRequest(BaseModel):
@@ -928,6 +1049,7 @@ class TikTokStatusRequest(BaseModel):
 def tiktok_status(
     data: TikTokStatusRequest
 ):
+
     try:
         result = tiktok_json_request(
             TIKTOK_STATUS_URL,
@@ -950,24 +1072,34 @@ def tiktok_status(
 
 
 # ============================================================
-# HOME / TESTS
+# HOME
 # ============================================================
 
 @app.get("/")
 def home():
+
     return {
         "status": "online",
         "message": (
             "Servidor de procesamiento "
             "de videos funcionando"
         ),
-        "tiktok_oauth": f"{BASE_URL}/tiktok/login",
-        "tiktok_test": f"{BASE_URL}/tiktok/me"
+        "tiktok_oauth": (
+            f"{BASE_URL}/tiktok/login"
+        ),
+        "tiktok_test": (
+            f"{BASE_URL}/tiktok/me"
+        )
     }
 
 
+# ============================================================
+# TEST
+# ============================================================
+
 @app.get("/test")
 def test():
+
     return {
         "success": True,
         "message": (
@@ -976,11 +1108,19 @@ def test():
     }
 
 
+# ============================================================
+# TEST FFMPEG
+# ============================================================
+
 @app.get("/test_ffmpeg")
 def test_ffmpeg():
+
     try:
         result = subprocess.run(
-            ["ffmpeg", "-version"],
+            [
+                "ffmpeg",
+                "-version"
+            ],
             capture_output=True,
             text=True,
             timeout=10
@@ -1005,7 +1145,7 @@ def test_ffmpeg():
 
 
 # ============================================================
-# DOWNLOAD VIDEO FROM TIKTOK
+# DESCARGAR VIDEO DE TIKTOK
 # ============================================================
 
 class VideoRequest(BaseModel):
@@ -1016,8 +1156,12 @@ class VideoRequest(BaseModel):
 def download_video(
     data: VideoRequest
 ):
+
     if not data.tiktok_url.startswith(
-        ("http://", "https://")
+        (
+            "http://",
+            "https://"
+        )
     ):
         raise HTTPException(
             status_code=400,
@@ -1071,7 +1215,9 @@ def download_video(
                 )
             }
 
-        filename = os.path.basename(files[0])
+        filename = os.path.basename(
+            files[0]
+        )
 
         return {
             "success": True,
@@ -1099,11 +1245,14 @@ def download_video(
 
 
 # ============================================================
-# VIDEO FILE SERVING
+# SERVIR VIDEOS
 # ============================================================
 
 def get_video_path(filename):
-    safe_filename = os.path.basename(filename)
+
+    safe_filename = os.path.basename(
+        filename
+    )
 
     return os.path.join(
         VIDEO_DIR,
@@ -1113,7 +1262,10 @@ def get_video_path(filename):
 
 @app.head("/video/{filename}")
 def head_video(filename: str):
-    filepath = get_video_path(filename)
+
+    filepath = get_video_path(
+        filename
+    )
 
     if not os.path.isfile(filepath):
         raise HTTPException(
@@ -1121,7 +1273,9 @@ def head_video(filename: str):
             detail="Video no encontrado"
         )
 
-    file_size = os.path.getsize(filepath)
+    file_size = os.path.getsize(
+        filepath
+    )
 
     return Response(
         status_code=200,
@@ -1140,7 +1294,10 @@ def get_video(
     filename: str,
     request: Request
 ):
-    filepath = get_video_path(filename)
+
+    filepath = get_video_path(
+        filename
+    )
 
     if not os.path.isfile(filepath):
         raise HTTPException(
@@ -1148,9 +1305,13 @@ def get_video(
             detail="Video no encontrado"
         )
 
-    file_size = os.path.getsize(filepath)
+    file_size = os.path.getsize(
+        filepath
+    )
 
-    range_header = request.headers.get("range")
+    range_header = request.headers.get(
+        "range"
+    )
 
     if not range_header:
         return FileResponse(
@@ -1218,17 +1379,24 @@ def get_video(
                 }
             )
 
-        content_length = end - start + 1
+        content_length = (
+            end - start + 1
+        )
 
         def iter_file():
-            with open(filepath, "rb") as video_file:
+
+            with open(
+                filepath,
+                "rb"
+            ) as video_file:
+
                 video_file.seek(start)
 
                 remaining = content_length
-
                 chunk_size = 1024 * 1024
 
                 while remaining > 0:
+
                     read_size = min(
                         chunk_size,
                         remaining
@@ -1250,12 +1418,17 @@ def get_video(
             status_code=206,
             media_type="video/mp4",
             headers={
-                "Content-Length": str(content_length),
+                "Content-Length":
+                    str(content_length),
                 "Content-Range":
-                    f"bytes {start}-{end}/{file_size}",
+                    (
+                        f"bytes {start}-"
+                        f"{end}/{file_size}"
+                    ),
                 "Accept-Ranges": "bytes",
                 "Content-Disposition": "inline",
-                "Cache-Control": "public, max-age=3600"
+                "Cache-Control":
+                    "public, max-age=3600"
             }
         )
 
@@ -1270,7 +1443,7 @@ def get_video(
 
 
 # ============================================================
-# ELEVENLABS MULTIPART
+# MULTIPART PARA ELEVENLABS
 # ============================================================
 
 def create_multipart_body(
@@ -1278,6 +1451,7 @@ def create_multipart_body(
     filename,
     text
 ):
+
     boundary = (
         "----WebKitFormBoundary"
         + uuid.uuid4().hex
@@ -1297,14 +1471,13 @@ def create_multipart_body(
     )
 
     body.extend(file_data)
-
     body.extend(b"\r\n")
 
     body.extend(
         (
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; '
-            f'name="text"\r\n'
+            f'name="text"\r\n"
             f"\r\n"
         ).encode("utf-8")
     )
@@ -1332,18 +1505,24 @@ def get_forced_alignment(
     audio_path,
     text
 ):
+
     if not ELEVENLABS_API_KEY:
         raise Exception(
             "Falta ELEVENLABS_API_KEY en Render"
         )
 
-    with open(audio_path, "rb") as f:
+    with open(
+        audio_path,
+        "rb"
+    ) as f:
         audio_data = f.read()
 
-    body, boundary = create_multipart_body(
-        audio_data,
-        os.path.basename(audio_path),
-        text
+    body, boundary = (
+        create_multipart_body(
+            audio_data,
+            os.path.basename(audio_path),
+            text
+        )
     )
 
     url = (
@@ -1387,6 +1566,7 @@ def get_forced_alignment(
         )
 
     except urllib.error.HTTPError as e:
+
         error_body = (
             e.read()
             .decode(
@@ -1403,16 +1583,18 @@ def get_forced_alignment(
 
     except Exception as e:
         raise Exception(
-            "No se pudo obtener la sincronización "
-            f"de ElevenLabs: {e}"
+            "No se pudo obtener "
+            "la sincronización de "
+            f"ElevenLabs: {e}"
         )
 
 
 # ============================================================
-# SRT
+# TIEMPOS SRT
 # ============================================================
 
 def format_srt_time(seconds):
+
     milliseconds = int(
         round(
             (seconds % 1) * 1000
@@ -1426,11 +1608,7 @@ def format_srt_time(seconds):
         total_seconds += 1
 
     hours = total_seconds // 3600
-
-    minutes = (
-        total_seconds % 3600
-    ) // 60
-
+    minutes = (total_seconds % 3600) // 60
     secs = total_seconds % 60
 
     return (
@@ -1441,16 +1619,24 @@ def format_srt_time(seconds):
     )
 
 
+# ============================================================
+# CREAR SUBTÍTULOS
+# ============================================================
+
 def create_srt_from_alignment(
     alignment,
     srt_path
 ):
-    words = alignment.get("words", [])
+
+    words = alignment.get(
+        "words",
+        []
+    )
 
     if not words:
         raise Exception(
-            "ElevenLabs no devolvió palabras "
-            "para sincronizar"
+            "ElevenLabs no devolvió "
+            "palabras para sincronizar"
         )
 
     subtitles = []
@@ -1465,19 +1651,29 @@ def create_srt_from_alignment(
     MAX_CHARS = 42
 
     for word_data in words:
+
         word = str(
-            word_data.get("text", "")
+            word_data.get(
+                "text",
+                ""
+            )
         ).strip()
 
         if not word:
             continue
 
         start = float(
-            word_data.get("start", 0)
+            word_data.get(
+                "start",
+                0
+            )
         )
 
         end = float(
-            word_data.get("end", start)
+            word_data.get(
+                "end",
+                start
+            )
         )
 
         projected_chars = (
@@ -1492,7 +1688,10 @@ def create_srt_from_alignment(
 
         large_pause = (
             previous_end is not None
-            and start - previous_end >= 0.45
+            and (
+                start - previous_end
+                >= 0.45
+            )
         )
 
         should_break = (
@@ -1505,6 +1704,7 @@ def create_srt_from_alignment(
         )
 
         if should_break:
+
             subtitles.append(
                 (
                     current_start,
@@ -1550,6 +1750,7 @@ def create_srt_from_alignment(
         "w",
         encoding="utf-8"
     ) as f:
+
         for index, (
             start,
             end,
@@ -1558,7 +1759,10 @@ def create_srt_from_alignment(
             subtitles,
             start=1
         ):
-            f.write(f"{index}\n")
+
+            f.write(
+                f"{index}\n"
+            )
 
             f.write(
                 f"{format_srt_time(start)} --> "
@@ -1571,10 +1775,11 @@ def create_srt_from_alignment(
 
 
 # ============================================================
-# MEDIA DURATIONS
+# DURACIÓN AUDIO
 # ============================================================
 
 def get_audio_duration(audio_path):
+
     result = subprocess.run(
         [
             "ffprobe",
@@ -1597,8 +1802,8 @@ def get_audio_duration(audio_path):
 
     if result.returncode != 0:
         raise Exception(
-            "No se pudo obtener la duración "
-            "del audio: "
+            "No se pudo obtener "
+            "la duración del audio: "
             + result.stderr[-2000:]
         )
 
@@ -1607,7 +1812,12 @@ def get_audio_duration(audio_path):
     )
 
 
+# ============================================================
+# DURACIÓN VIDEO
+# ============================================================
+
 def get_video_duration(video_path):
+
     result = subprocess.run(
         [
             "ffprobe",
@@ -1630,8 +1840,8 @@ def get_video_duration(video_path):
 
     if result.returncode != 0:
         raise Exception(
-            "No se pudo obtener la duración "
-            "del video: "
+            "No se pudo obtener "
+            "la duración del video: "
             + result.stderr[-2000:]
         )
 
@@ -1641,10 +1851,11 @@ def get_video_duration(video_path):
 
 
 # ============================================================
-# VALIDATE OUTPUT MP4
+# VALIDAR MP4 FINAL
 # ============================================================
 
 def validate_output_video(video_path):
+
     if not os.path.isfile(video_path):
         raise Exception(
             "El archivo MP4 no existe"
@@ -1691,13 +1902,11 @@ def validate_output_video(video_path):
     except json.JSONDecodeError as e:
         raise Exception(
             "ffprobe devolvió una respuesta "
-            f"inválida: {e}"
+            "inválida: "
+            + str(e)
         )
 
-    format_info = (
-        probe.get("format")
-        or {}
-    )
+    format_info = probe.get("format") or {}
 
     format_name = (
         format_info.get("format_name")
@@ -1709,7 +1918,9 @@ def validate_output_video(video_path):
     )
 
     try:
-        duration = float(duration_raw)
+        duration = float(
+            duration_raw
+        )
     except (
         TypeError,
         ValueError
@@ -1747,7 +1958,8 @@ def validate_output_video(video_path):
     if not format_ok:
         raise Exception(
             "El archivo no es un contenedor "
-            f"MP4/MOV válido. format_name={format_name}"
+            f"MP4/MOV válido. format_name="
+            f"{format_name}"
         )
 
     if duration <= 0:
@@ -1780,19 +1992,24 @@ def validate_output_video(video_path):
 
 
 # ============================================================
-# CLEANUP
+# LIMPIAR ARCHIVOS TEMPORALES ANTIGUOS
 # ============================================================
 
 def cleanup_old_video_files(
     max_age_hours=24
 ):
+
     now = time.time()
     max_age = max_age_hours * 60 * 60
 
     try:
         for filepath in glob.glob(
-            os.path.join(VIDEO_DIR, "*")
+            os.path.join(
+                VIDEO_DIR,
+                "*"
+            )
         ):
+
             if not os.path.isfile(filepath):
                 continue
 
@@ -1816,7 +2033,239 @@ cleanup_old_video_files()
 
 
 # ============================================================
-# BACKGROUND PROCESS
+# EJECUTAR FFMPEG CON LOG EN TIEMPO REAL
+#
+# MEJORA IMPORTANTE:
+# Ya no usamos capture_output=True.
+#
+# Render ahora recibirá las líneas de FFmpeg en sus logs.
+# También guardamos:
+#   - ffmpeg_started_at
+#   - ffmpeg_elapsed_seconds
+#   - ffmpeg_last_line
+#   - ffmpeg_time
+#   - ffmpeg_returncode
+#
+# Si supera FFMPEG_TIMEOUT, se termina el proceso.
+# ============================================================
+
+def run_ffmpeg_with_logging(
+    command,
+    job_id
+):
+
+    started_at = time.time()
+
+    update_job_state(
+        job_id,
+        status="processing",
+        stage="ffmpeg",
+        ffmpeg_started_at=int(started_at),
+        ffmpeg_timeout=FFMPEG_TIMEOUT,
+        ffmpeg_elapsed_seconds=0,
+        ffmpeg_last_line="FFmpeg iniciado"
+    )
+
+    print(
+        f"[JOB {job_id}] "
+        f"[FFMPEG] Iniciando proceso. "
+        f"Timeout={FFMPEG_TIMEOUT}s",
+        flush=True
+    )
+
+    print(
+        f"[JOB {job_id}] "
+        f"[FFMPEG] Comando: "
+        f"{' '.join(command)}",
+        flush=True
+    )
+
+    process = None
+    last_state_update = started_at
+    last_line = ""
+    last_ffmpeg_time = None
+
+    try:
+
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+
+        while True:
+
+            elapsed = (
+                time.time()
+                - started_at
+            )
+
+            if elapsed >= FFMPEG_TIMEOUT:
+
+                print(
+                    f"[JOB {job_id}] "
+                    f"[FFMPEG] TIMEOUT después "
+                    f"de {elapsed:.1f}s. "
+                    f"Terminando proceso.",
+                    flush=True
+                )
+
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
+                try:
+                    process.wait(timeout=10)
+                except Exception:
+                    pass
+
+                raise TimeoutError(
+                    "FFmpeg superó "
+                    f"{FFMPEG_TIMEOUT} segundos."
+                )
+
+            # Leemos una línea si existe.
+            line = None
+
+            if process.stderr is not None:
+
+                line = process.stderr.readline()
+
+            if line:
+
+                line = line.strip()
+
+                if line:
+                    last_line = line
+
+                    # Intentamos extraer el tiempo de FFmpeg:
+                    # time=00:00:12.34
+                    if "time=" in line:
+
+                        try:
+                            time_part = (
+                                line.split(
+                                    "time=",
+                                    1
+                                )[1]
+                                .split(
+                                    " ",
+                                    1
+                                )[0]
+                            )
+
+                            last_ffmpeg_time = (
+                                time_part
+                            )
+
+                        except Exception:
+                            pass
+
+                    print(
+                        f"[JOB {job_id}] "
+                        f"[FFMPEG] {line}",
+                        flush=True
+                    )
+
+            else:
+
+                # EOF o temporalmente sin línea.
+                if process.poll() is not None:
+                    break
+
+                time.sleep(0.1)
+
+            # Actualizamos el JSON de estado cada pocos segundos.
+            now = time.time()
+
+            if (
+                now
+                - last_state_update
+                >= FFMPEG_LOG_UPDATE_SECONDS
+            ):
+
+                elapsed_now = (
+                    now
+                    - started_at
+                )
+
+                update_job_state(
+                    job_id,
+                    status="processing",
+                    stage="ffmpeg",
+                    ffmpeg_elapsed_seconds=round(
+                        elapsed_now,
+                        1
+                    ),
+                    ffmpeg_last_line=last_line[
+                        -1000:
+                    ],
+                    ffmpeg_time=last_ffmpeg_time
+                )
+
+                last_state_update = now
+
+        returncode = process.returncode
+
+        elapsed = (
+            time.time()
+            - started_at
+        )
+
+        update_job_state(
+            job_id,
+            ffmpeg_elapsed_seconds=round(
+                elapsed,
+                1
+            ),
+            ffmpeg_last_line=last_line[-1000:],
+            ffmpeg_time=last_ffmpeg_time,
+            ffmpeg_returncode=returncode,
+            ffmpeg_finished_at=int(
+                time.time()
+            )
+        )
+
+        print(
+            f"[JOB {job_id}] "
+            f"[FFMPEG] Finalizado. "
+            f"returncode={returncode}, "
+            f"tiempo={elapsed:.1f}s",
+            flush=True
+        )
+
+        if returncode != 0:
+
+            raise RuntimeError(
+                "FFmpeg terminó con código "
+                f"{returncode}. "
+                f"Última salida: "
+                f"{last_line[-3000:]}"
+            )
+
+        return {
+            "returncode": returncode,
+            "elapsed": elapsed,
+            "last_line": last_line,
+            "ffmpeg_time": last_ffmpeg_time
+        }
+
+    finally:
+
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    process.kill()
+            except Exception:
+                pass
+
+
+# ============================================================
+# PROCESAMIENTO BACKGROUND
 # ============================================================
 
 def process_video_background(
@@ -1827,18 +2276,36 @@ def process_video_background(
     background_path,
     subtitle_text
 ):
+
     state = (
         load_job_state(job_id)
         or {}
     )
 
+    started_total = time.time()
+
     try:
+
+        # ----------------------------------------------------
+        # ETAPA 1: ALIGNMENT
+        # ----------------------------------------------------
+
         state["status"] = "processing"
         state["stage"] = "alignment"
+        state["started_at"] = int(
+            started_total
+        )
 
         save_job_state(
             job_id,
             state
+        )
+
+        print(
+            f"[JOB {job_id}] "
+            f"[ALIGNMENT] Iniciando "
+            f"ElevenLabs.",
+            flush=True
         )
 
         alignment = get_forced_alignment(
@@ -1856,22 +2323,56 @@ def process_video_background(
             srt_path
         )
 
-        voice_duration = get_audio_duration(
-            voice_path
+        print(
+            f"[JOB {job_id}] "
+            f"[ALIGNMENT] SRT creado: "
+            f"{srt_path}",
+            flush=True
         )
 
-        video_duration = get_video_duration(
-            input_path
+        # ----------------------------------------------------
+        # DURACIONES
+        # ----------------------------------------------------
+
+        voice_duration = (
+            get_audio_duration(
+                voice_path
+            )
         )
 
-        state["voice_duration"] = voice_duration
-        state["video_duration"] = video_duration
-        state["stage"] = "ffmpeg"
+        video_duration = (
+            get_video_duration(
+                input_path
+            )
+        )
+
+        state["voice_duration"] = (
+            voice_duration
+        )
+
+        state["video_duration"] = (
+            video_duration
+        )
+
+        state["stage"] = "ffmpeg_prepare"
 
         save_job_state(
             job_id,
             state
         )
+
+        print(
+            f"[JOB {job_id}] "
+            f"[INFO] voice_duration="
+            f"{voice_duration:.3f}s | "
+            f"video_duration="
+            f"{video_duration:.3f}s",
+            flush=True
+        )
+
+        # ----------------------------------------------------
+        # PREPARAR SUBTÍTULOS
+        # ----------------------------------------------------
 
         subtitle_filter_path = (
             srt_path
@@ -1924,91 +2425,87 @@ def process_video_background(
                 temp_output_path
             )
 
-        # El video se repite si es más corto que la voz.
-        # El audio final dura exactamente lo mismo que la voz.
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
+        # ----------------------------------------------------
+        # COMANDO FFMPEG
+        # ----------------------------------------------------
 
-                "-stream_loop",
-                "-1",
-                "-i",
-                input_path,
+        ffmpeg_command = [
+            "ffmpeg",
+            "-y",
 
-                "-i",
-                voice_path,
+            "-hide_banner",
+            "-loglevel",
+            "info",
 
-                "-stream_loop",
-                "-1",
-                "-i",
-                background_path,
+            "-stream_loop",
+            "-1",
 
-                "-filter_complex",
-                filter_complex,
+            "-i",
+            input_path,
 
-                "-map",
-                "[video]",
+            "-i",
+            voice_path,
 
-                "-map",
-                "[audio]",
+            "-stream_loop",
+            "-1",
 
-                "-c:v",
-                "libx264",
+            "-i",
+            background_path,
 
-                "-preset",
-                "veryfast",
+            "-filter_complex",
+            filter_complex,
 
-                "-crf",
-                "23",
+            "-map",
+            "[video]",
 
-                "-pix_fmt",
-                "yuv420p",
+            "-map",
+            "[audio]",
 
-                "-c:a",
-                "aac",
+            "-c:v",
+            "libx264",
 
-                "-b:a",
-                "128k",
+            "-preset",
+            "veryfast",
 
-                "-t",
-                str(voice_duration),
+            "-crf",
+            "23",
 
-                "-movflags",
-                "+faststart",
+            "-pix_fmt",
+            "yuv420p",
 
-                temp_output_path
-            ],
-            capture_output=True,
-            text=True,
-            timeout=300
+            "-c:a",
+            "aac",
+
+            "-b:a",
+            "128k",
+
+            "-t",
+            str(voice_duration),
+
+            "-movflags",
+            "+faststart",
+
+            temp_output_path
+        ]
+
+        # ----------------------------------------------------
+        # ETAPA 2: FFMPEG
+        # ----------------------------------------------------
+
+        result = run_ffmpeg_with_logging(
+            ffmpeg_command,
+            job_id
         )
 
-        if result.returncode != 0:
-            state["status"] = "error"
-            state["stage"] = "ffmpeg"
-            state["error"] = (
-                "FFmpeg error:\n"
-                + result.stderr[-5000:]
-            )
+        # ----------------------------------------------------
+        # ETAPA 3: VALIDACIÓN
+        # ----------------------------------------------------
 
-            save_job_state(
-                job_id,
-                state
-            )
+        state = load_job_state(
+            job_id
+        ) or state
 
-            if os.path.isfile(
-                temp_output_path
-            ):
-                try:
-                    os.remove(
-                        temp_output_path
-                    )
-                except Exception:
-                    pass
-
-            return
-
+        state["status"] = "processing"
         state["stage"] = "validation"
 
         save_job_state(
@@ -2016,12 +2513,22 @@ def process_video_background(
             state
         )
 
+        print(
+            f"[JOB {job_id}] "
+            f"[VALIDATION] Validando MP4...",
+            flush=True
+        )
+
         try:
-            validation = validate_output_video(
-                temp_output_path
+
+            validation = (
+                validate_output_video(
+                    temp_output_path
+                )
             )
 
         except Exception as validation_error:
+
             state["status"] = "error"
             state["stage"] = "validation"
             state["error"] = (
@@ -2029,9 +2536,21 @@ def process_video_background(
                 + str(validation_error)
             )
 
+            state["total_elapsed_seconds"] = round(
+                time.time() - started_total,
+                1
+            )
+
             save_job_state(
                 job_id,
                 state
+            )
+
+            print(
+                f"[JOB {job_id}] "
+                f"[VALIDATION] ERROR: "
+                f"{validation_error}",
+                flush=True
             )
 
             if os.path.isfile(
@@ -2046,8 +2565,10 @@ def process_video_background(
 
             return
 
-        # El archivo final solo aparece después
-        # de pasar la validación.
+        # ----------------------------------------------------
+        # ETAPA 4: REEMPLAZO FINAL
+        # ----------------------------------------------------
+
         os.replace(
             temp_output_path,
             output_path
@@ -2057,51 +2578,179 @@ def process_video_background(
             output_path
         )
 
+        total_elapsed = (
+            time.time()
+            - started_total
+        )
+
         state["status"] = "completed"
         state["stage"] = "completed"
+
         state["filename"] = filename
+
         state["download_url"] = (
-            f"{BASE_URL}/video/{filename}"
+            f"{BASE_URL}"
+            f"/video/{filename}"
         )
+
         state["alignment"] = True
-        state["output_size"] = validation["size"]
-        state["output_duration"] = validation["duration"]
-        state["output_format"] = validation["format"]
+
+        state["output_size"] = (
+            validation["size"]
+        )
+
+        state["output_duration"] = (
+            validation["duration"]
+        )
+
+        state["output_format"] = (
+            validation["format"]
+        )
+
         state["output_video_codec"] = (
             validation["video_codecs"]
         )
+
         state["output_audio_codec"] = (
             validation["audio_codecs"]
         )
 
+        state["total_elapsed_seconds"] = round(
+            total_elapsed,
+            1
+        )
+
         save_job_state(
             job_id,
             state
+        )
+
+        print(
+            f"[JOB {job_id}] "
+            f"[COMPLETED] Video terminado. "
+            f"Tiempo total="
+            f"{total_elapsed:.1f}s | "
+            f"FFmpeg="
+            f"{result['elapsed']:.1f}s | "
+            f"Tamaño="
+            f"{validation['size']} bytes",
+            flush=True
         )
 
         cleanup_old_video_files()
 
-    except subprocess.TimeoutExpired:
+    except TimeoutError as e:
+
+        state = load_job_state(
+            job_id
+        ) or state
+
         state["status"] = "error"
-        state["stage"] = "timeout"
-        state["error"] = (
-            "FFmpeg superó los 300 segundos"
+        state["stage"] = "ffmpeg"
+        state["error"] = str(e)
+        state["ffmpeg_timeout"] = FFMPEG_TIMEOUT
+        state["total_elapsed_seconds"] = round(
+            time.time() - started_total,
+            1
         )
 
         save_job_state(
             job_id,
             state
+        )
+
+        print(
+            f"[JOB {job_id}] "
+            f"[ERROR] {e}",
+            flush=True
+        )
+
+        temp_output_path = (
+            output_path
+            + ".tmp.mp4"
+        )
+
+        if os.path.isfile(
+            temp_output_path
+        ):
+            try:
+                os.remove(
+                    temp_output_path
+                )
+            except Exception:
+                pass
+
+    except subprocess.TimeoutExpired as e:
+
+        state = load_job_state(
+            job_id
+        ) or state
+
+        state["status"] = "error"
+        state["stage"] = "ffmpeg"
+        state["error"] = (
+            "FFmpeg superó el tiempo máximo."
+        )
+        state["total_elapsed_seconds"] = round(
+            time.time() - started_total,
+            1
+        )
+
+        save_job_state(
+            job_id,
+            state
+        )
+
+        print(
+            f"[JOB {job_id}] "
+            f"[ERROR] Timeout de FFmpeg: {e}",
+            flush=True
         )
 
     except Exception as e:
+
+        state = load_job_state(
+            job_id
+        ) or state
+
         state["status"] = "error"
-        state["stage"] = "exception"
+
+        if state.get("stage") is None:
+            state["stage"] = "unknown"
+
         state["error"] = str(e)
+
+        state["total_elapsed_seconds"] = round(
+            time.time() - started_total,
+            1
+        )
 
         save_job_state(
             job_id,
             state
         )
+
+        print(
+            f"[JOB {job_id}] "
+            f"[ERROR] {type(e).__name__}: "
+            f"{e}",
+            flush=True
+        )
+
+        temp_output_path = (
+            output_path
+            + ".tmp.mp4"
+        )
+
+        if os.path.isfile(
+            temp_output_path
+        ):
+            try:
+                os.remove(
+                    temp_output_path
+                )
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -2115,6 +2764,7 @@ async def process_video(
     background: str = Form(...),
     text: str = Form(...)
 ):
+
     job_id = str(uuid.uuid4())
 
     input_path = os.path.join(
@@ -2138,11 +2788,20 @@ async def process_video(
     )
 
     try:
+
+        print(
+            f"[JOB {job_id}] "
+            f"[UPLOAD] Guardando archivos...",
+            flush=True
+        )
+
         with open(
             input_path,
             "wb"
         ) as f:
+
             while True:
+
                 chunk = await video.read(
                     1024 * 1024
                 )
@@ -2156,7 +2815,9 @@ async def process_video(
             voice_path,
             "wb"
         ) as f:
+
             while True:
+
                 chunk = await voice.read(
                     1024 * 1024
                 )
@@ -2165,6 +2826,27 @@ async def process_video(
                     break
 
                 f.write(chunk)
+
+        # Validación básica de URL.
+        parsed = urllib.parse.urlparse(
+            background
+        )
+
+        if parsed.scheme not in (
+            "http",
+            "https"
+        ):
+            raise Exception(
+                "La URL del sonido de fondo "
+                "no es válida."
+            )
+
+        print(
+            f"[JOB {job_id}] "
+            f"[DOWNLOAD] Descargando "
+            f"background...",
+            flush=True
+        )
 
         urllib.request.urlretrieve(
             background,
@@ -2197,7 +2879,10 @@ async def process_video(
             job_id,
             {
                 "status": "queued",
-                "stage": "queued"
+                "stage": "queued",
+                "created_at": int(
+                    time.time()
+                )
             }
         )
 
@@ -2216,16 +2901,22 @@ async def process_video(
 
         thread.start()
 
+        print(
+            f"[JOB {job_id}] "
+            f"[QUEUED] Procesamiento "
+            f"background iniciado.",
+            flush=True
+        )
+
         return {
             "success": True,
             "job_id": job_id,
             "status": "processing",
-            "status_url": (
-                f"{BASE_URL}/status/{job_id}"
-            )
+            "stage": "queued"
         }
 
     except Exception as e:
+
         save_job_state(
             job_id,
             {
@@ -2235,32 +2926,28 @@ async def process_video(
             }
         )
 
+        print(
+            f"[JOB {job_id}] "
+            f"[UPLOAD ERROR] {e}",
+            flush=True
+        )
+
         return {
             "success": False,
             "job_id": job_id,
             "status": "error",
+            "stage": "upload",
             "error": str(e)
         }
 
 
 # ============================================================
 # STATUS VIDEO
-#
-# IMPORTANTE PARA MAKE:
-# Si el job sigue procesándose, SIEMPRE devuelve HTTP 200
-# y status=processing.
-#
-# Cuando termina devuelve:
-# status=completed
-# download_url=https://.../video/xxxxx_processed.mp4
-#
-# Si falla devuelve:
-# status=error
-# error=...
 # ============================================================
 
 @app.get("/status/{job_id}")
 def get_status(job_id: str):
+
     output_path = os.path.join(
         VIDEO_DIR,
         f"{job_id}_processed.mp4"
@@ -2281,19 +2968,28 @@ def get_status(job_id: str):
         f"{job_id}_background.mp3"
     )
 
-    state = load_job_state(job_id)
+    state = load_job_state(
+        job_id
+    )
 
-    # ========================================================
-    # 1. SI EL ARCHIVO FINAL EXISTE, VALIDARLO
-    # ========================================================
+    # --------------------------------------------------------
+    # SI YA EXISTE EL MP4 FINAL
+    # --------------------------------------------------------
 
-    if os.path.isfile(output_path):
+    if os.path.isfile(
+        output_path
+    ):
+
         try:
-            validation = validate_output_video(
-                output_path
+
+            validation = (
+                validate_output_video(
+                    output_path
+                )
             )
 
         except Exception as validation_error:
+
             if state is None:
                 state = {}
 
@@ -2325,25 +3021,30 @@ def get_status(job_id: str):
             "stage": "completed",
             "filename": filename,
             "download_url": (
-                f"{BASE_URL}/video/{filename}"
+                f"{BASE_URL}"
+                f"/video/{filename}"
             ),
             "output_size": validation["size"],
             "output_duration": validation["duration"],
             "output_format": validation["format"],
-            "output_video_codec": (
-                validation["video_codecs"]
-            ),
-            "output_audio_codec": (
+            "output_video_codec":
+                validation["video_codecs"],
+            "output_audio_codec":
                 validation["audio_codecs"]
-            )
         }
 
         if state:
+
             for key in [
                 "voice_duration",
                 "video_duration",
-                "alignment"
+                "alignment",
+                "ffmpeg_elapsed_seconds",
+                "ffmpeg_time",
+                "ffmpeg_returncode",
+                "total_elapsed_seconds"
             ]:
+
                 if key in state:
                     recovered_state[key] = state[key]
 
@@ -2353,16 +3054,18 @@ def get_status(job_id: str):
             **recovered_state
         }
 
-    # ========================================================
-    # 2. SI TODAVÍA ESTÁ PROCESANDO
-    # ========================================================
+    # --------------------------------------------------------
+    # SI EL JOB SIGUE EN PROCESAMIENTO
+    # --------------------------------------------------------
 
     if (
         os.path.isfile(input_path)
         and os.path.isfile(voice_path)
         and os.path.isfile(background_path)
     ):
+
         if state:
+
             return {
                 "success": True,
                 "job_id": job_id,
@@ -2373,23 +3076,20 @@ def get_status(job_id: str):
             "success": True,
             "job_id": job_id,
             "status": "processing",
-            "stage": "processing"
+            "stage": "unknown"
         }
 
-    # ========================================================
-    # 3. SI HAY ESTADO DE ERROR/QUEUE
-    # ========================================================
+    # --------------------------------------------------------
+    # SI TENEMOS ESTADO PERO FALTAN ARCHIVOS
+    # --------------------------------------------------------
 
     if state:
+
         return {
             "success": True,
             "job_id": job_id,
             **state
         }
-
-    # ========================================================
-    # 4. JOB REALMENTE NO EXISTE
-    # ========================================================
 
     raise HTTPException(
         status_code=404,
@@ -2398,26 +3098,55 @@ def get_status(job_id: str):
 
 
 # ============================================================
-# ENDPOINT EXTRA PARA COMPROBAR SI UN VIDEO EXISTE
+# ENDPOINT DE DIAGNÓSTICO DE UN JOB
 #
-# Útil para probar manualmente desde navegador/Make.
+# Útil para ver rápidamente qué archivos existen.
 # ============================================================
 
-@app.get("/video_check/{filename}")
-def video_check(filename: str):
-    filepath = get_video_path(filename)
+@app.get("/debug/{job_id}")
+def debug_job(job_id: str):
 
-    if not os.path.isfile(filepath):
-        return {
-            "success": False,
-            "exists": False,
-            "filename": filename
+    state = load_job_state(job_id)
+
+    files = {}
+
+    patterns = {
+        "input":
+            f"{job_id}_input.mp4",
+        "voice":
+            f"{job_id}_voice.mp3",
+        "background":
+            f"{job_id}_background.mp3",
+        "output":
+            f"{job_id}_processed.mp4",
+        "temp_output":
+            f"{job_id}_processed.mp4.tmp.mp4",
+        "srt":
+            f"{job_id}.srt"
+    }
+
+    for key, filename in patterns.items():
+
+        path = os.path.join(
+            VIDEO_DIR,
+            filename
+        )
+
+        files[key] = {
+            "exists":
+                os.path.isfile(path),
+            "size":
+                (
+                    os.path.getsize(path)
+                    if os.path.isfile(path)
+                    else 0
+                )
         }
 
     return {
         "success": True,
-        "exists": True,
-        "filename": filename,
-        "size": os.path.getsize(filepath),
-        "url": f"{BASE_URL}/video/{filename}"
+        "job_id": job_id,
+        "ffmpeg_timeout": FFMPEG_TIMEOUT,
+        "state": state,
+        "files": files
     }
