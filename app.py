@@ -2595,7 +2595,7 @@ def process_video_background(
         # son realmente reproducibles.
         temp_output_path = (
             output_path
-            + ".tmp"
+            + ".tmp.mp4"
         )
 
         # Si quedó un temporal de un intento anterior,
