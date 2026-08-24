@@ -2230,6 +2230,245 @@ def get_video_duration(
 
 
 # ============================================================
+# VALIDAR MP4 FINAL
+# ============================================================
+
+def validate_output_video(
+    video_path
+):
+
+    if not os.path.isfile(
+        video_path
+    ):
+
+        raise Exception(
+            "El archivo MP4 no existe"
+        )
+
+    file_size = os.path.getsize(
+        video_path
+    )
+
+    if file_size < 50 * 1024:
+
+        raise Exception(
+            "El MP4 parece incompleto: "
+            f"tamaño de {file_size} bytes"
+        )
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            (
+                "format=format_name,"
+                "duration"
+            ),
+            "-show_entries",
+            (
+                "stream=codec_type,"
+                "codec_name"
+            ),
+            "-of",
+            "json",
+            video_path
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30
+    )
+
+    if result.returncode != 0:
+
+        raise Exception(
+            "ffprobe no pudo leer el MP4: "
+            + result.stderr[-3000:]
+        )
+
+    try:
+
+        probe = json.loads(
+            result.stdout
+        )
+
+    except json.JSONDecodeError as e:
+
+        raise Exception(
+            "ffprobe devolvió una respuesta "
+            "inválida: "
+            + str(e)
+        )
+
+    format_info = (
+        probe.get("format")
+        or {}
+    )
+
+    format_name = (
+        format_info.get(
+            "format_name"
+        )
+        or ""
+    )
+
+    duration_raw = (
+        format_info.get(
+            "duration"
+        )
+    )
+
+    try:
+
+        duration = float(
+            duration_raw
+        )
+
+    except (
+        TypeError,
+        ValueError
+    ):
+
+        duration = 0
+
+    allowed_formats = {
+        "mov",
+        "mp4",
+        "m4a",
+        "3gp",
+        "3g2",
+        "mj2"
+    }
+
+    format_ok = any(
+        name in allowed_formats
+        for name in format_name.split(",")
+    )
+
+    streams = (
+        probe.get("streams")
+        or []
+    )
+
+    video_codecs = {
+        stream.get("codec_name")
+        for stream in streams
+        if stream.get("codec_type")
+        == "video"
+    }
+
+    audio_codecs = {
+        stream.get("codec_name")
+        for stream in streams
+        if stream.get("codec_type")
+        == "audio"
+    }
+
+    if not format_ok:
+
+        raise Exception(
+            "El archivo no es un contenedor "
+            f"MP4/MOV válido. format_name="
+            f"{format_name}"
+        )
+
+    if duration <= 0:
+
+        raise Exception(
+            "El MP4 tiene una duración "
+            "inválida"
+        )
+
+    if "h264" not in video_codecs:
+
+        raise Exception(
+            "El MP4 no contiene video H.264. "
+            f"Codecs encontrados: "
+            f"{sorted(video_codecs)}"
+        )
+
+    if "aac" not in audio_codecs:
+
+        raise Exception(
+            "El MP4 no contiene audio AAC. "
+            f"Codecs encontrados: "
+            f"{sorted(audio_codecs)}"
+        )
+
+    return {
+        "valid": True,
+        "size": file_size,
+        "duration": duration,
+        "format": format_name,
+        "video_codecs":
+            sorted(video_codecs),
+        "audio_codecs":
+            sorted(audio_codecs)
+    }
+
+
+# ============================================================
+# LIMPIAR ARCHIVOS TEMPORALES ANTIGUOS
+# ============================================================
+
+def cleanup_old_video_files(
+    max_age_hours=24
+):
+
+    now = time.time()
+
+    max_age = (
+        max_age_hours * 60 * 60
+    )
+
+    try:
+
+        for filepath in glob.glob(
+            os.path.join(
+                VIDEO_DIR,
+                "*"
+            )
+        ):
+
+            if not os.path.isfile(
+                filepath
+            ):
+
+                continue
+
+            try:
+
+                age = (
+                    now
+                    - os.path.getmtime(
+                        filepath
+                    )
+                )
+
+                if age > max_age:
+
+                    os.remove(
+                        filepath
+                    )
+
+            except Exception:
+
+                # Un archivo concreto no debe
+                # impedir el procesamiento.
+                continue
+
+    except Exception:
+
+        pass
+
+
+# Limpiar residuos de ejecuciones
+# anteriores al iniciar el servidor.
+cleanup_old_video_files()
+
+
+# ============================================================
 # PROCESAMIENTO BACKGROUND
 # ============================================================
 
@@ -2350,6 +2589,25 @@ def process_video_background(
             "[video]"
         )
 
+        # FFmpeg escribe primero en un archivo temporal.
+        # Solo lo convertimos en _processed.mp4 después
+        # de validar que el contenedor, video y audio
+        # son realmente reproducibles.
+        temp_output_path = (
+            output_path
+            + ".tmp"
+        )
+
+        # Si quedó un temporal de un intento anterior,
+        # lo eliminamos antes de empezar.
+        if os.path.isfile(
+            temp_output_path
+        ):
+
+            os.remove(
+                temp_output_path
+            )
+
         result = subprocess.run(
             [
                 "ffmpeg",
@@ -2388,6 +2646,9 @@ def process_video_background(
                 "-crf",
                 "23",
 
+                "-pix_fmt",
+                "yuv420p",
+
                 "-c:a",
                 "aac",
 
@@ -2402,7 +2663,7 @@ def process_video_background(
                 "-movflags",
                 "+faststart",
 
-                output_path
+                temp_output_path
             ],
             capture_output=True,
             text=True,
@@ -2425,19 +2686,36 @@ def process_video_background(
                 state
             )
 
+            if os.path.isfile(
+                temp_output_path
+            ):
+
+                try:
+                    os.remove(
+                        temp_output_path
+                    )
+                except Exception:
+                    pass
+
             return
 
-        if not os.path.isfile(
-            output_path
-        ):
+        try:
+
+            validation = (
+                validate_output_video(
+                    temp_output_path
+                )
+            )
+
+        except Exception as validation_error:
 
             state["status"] = (
                 "error"
             )
 
             state["error"] = (
-                "FFmpeg no generó "
-                "el video"
+                "Validación del MP4 falló: "
+                + str(validation_error)
             )
 
             save_job_state(
@@ -2445,7 +2723,26 @@ def process_video_background(
                 state
             )
 
+            if os.path.isfile(
+                temp_output_path
+            ):
+
+                try:
+                    os.remove(
+                        temp_output_path
+                    )
+                except Exception:
+                    pass
+
             return
+
+        # Reemplazo atómico: HTTP 6 solo podrá ver
+        # el nombre final cuando el archivo ya pasó
+        # todas las validaciones.
+        os.replace(
+            temp_output_path,
+            output_path
+        )
 
         filename = os.path.basename(
             output_path
@@ -2466,10 +2763,33 @@ def process_video_background(
 
         state["alignment"] = True
 
+        state["output_size"] = (
+            validation["size"]
+        )
+
+        state["output_duration"] = (
+            validation["duration"]
+        )
+
+        state["output_format"] = (
+            validation["format"]
+        )
+
+        state["output_video_codec"] = (
+            validation["video_codecs"]
+        )
+
+        state["output_audio_codec"] = (
+            validation["audio_codecs"]
+        )
+
         save_job_state(
             job_id,
             state
         )
+
+        # Limpiamos archivos de más de 24 horas.
+        cleanup_old_video_files()
 
     except subprocess.TimeoutExpired:
 
@@ -2708,6 +3028,48 @@ def get_status(
         output_path
     ):
 
+        try:
+
+            validation = (
+                validate_output_video(
+                    output_path
+                )
+            )
+
+        except Exception as validation_error:
+
+            # Si por alguna razón existe un archivo
+            # final inválido, no debemos reportarlo como
+            # completed ni entregarlo a Make.
+            if state is None:
+
+                state = {}
+
+            state["status"] = (
+                "error"
+            )
+
+            state["error"] = (
+                "El MP4 existente no pasó "
+                "la validación: "
+                + str(validation_error)
+            )
+
+            save_job_state(
+                job_id,
+                state
+            )
+
+            return {
+                "success":
+                    True,
+
+                "job_id":
+                    job_id,
+
+                **state
+            }
+
         filename = os.path.basename(
             output_path
         )
@@ -2723,7 +3085,22 @@ def get_status(
                 (
                     f"{BASE_URL}"
                     f"/video/{filename}"
-                )
+                ),
+
+            "output_size":
+                validation["size"],
+
+            "output_duration":
+                validation["duration"],
+
+            "output_format":
+                validation["format"],
+
+            "output_video_codec":
+                validation["video_codecs"],
+
+            "output_audio_codec":
+                validation["audio_codecs"]
         }
 
         if state:
