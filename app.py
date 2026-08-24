@@ -1,4 +1,3 @@
-
 from fastapi import (
 FastAPI,
 HTTPException,
@@ -2619,4 +2618,3 @@ raise HTTPException(
     status_code=404,
     detail="Job no encontrado"
 )
-
