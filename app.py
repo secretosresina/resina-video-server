@@ -27,21 +27,15 @@ import urllib.error
 import urllib.parse
 import json
 import time
-
 ============================================================
-
 APP
-
 ============================================================
 
 app = FastAPI(
 title="Resina Video Server"
 )
-
 ============================================================
-
 CONFIGURACIÓN GENERAL
-
 ============================================================
 
 BASE_URL = os.getenv(
@@ -55,21 +49,15 @@ os.makedirs(
 VIDEO_DIR,
 exist_ok=True
 )
-
 ============================================================
-
 ELEVENLABS
-
 ============================================================
 
 ELEVENLABS_API_KEY = os.getenv(
 "ELEVENLABS_API_KEY"
 )
-
 ============================================================
-
 TIKTOK
-
 ============================================================
 
 TIKTOK_CLIENT_KEY = os.getenv(
@@ -108,11 +96,8 @@ TIKTOK_PUBLISH_URL = (
 TIKTOK_STATUS_URL = (
 "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
 )
-
 ============================================================
-
 TIKTOK SCOPES
-
 ============================================================
 
 TIKTOK_SCOPES = (
@@ -120,55 +105,37 @@ TIKTOK_SCOPES = (
 "video.publish,"
 "video.upload"
 )
-
 ============================================================
-
 TOKEN STORAGE
-
-
 
 Para pruebas dejamos los tokens en /tmp.
 
-
-
 IMPORTANTE:
-
 /tmp puede desaparecer cuando Render reinicia el servicio.
-
 Más adelante podemos pasar esto a una base de datos.
-
 ============================================================
 
 TIKTOK_TOKEN_FILE = os.path.join(
 VIDEO_DIR,
 "tiktok_tokens.json"
 )
-
 ============================================================
-
 OAUTH STATE
 
-
-
 Guardamos temporalmente los state generados.
-
 ============================================================
 
 OAUTH_STATE_FILE = os.path.join(
 VIDEO_DIR,
 "tiktok_oauth_states.json"
 )
-
 ============================================================
-
 VERIFICACIÓN DE DOMINIO TIKTOK
-
 ============================================================
 
 TIKTOK_VERIFICATION_FILE = (
 "tiktokMBXNgoJHxI9pXWdcx90DU4Hgx7rg8RV.txt"
 )
-
 El nombre correcto según tu código original:
 
 TIKTOK_VERIFICATION_FILE = (
@@ -189,9 +156,7 @@ def tiktok_verification():
 return TIKTOK_VERIFICATION_CONTENT
 
 ============================================================
-
 ESTADO DE JOBS
-
 ============================================================
 
 def job_state_path(job_id):
@@ -258,9 +223,7 @@ except Exception:
     return None
 
 ============================================================
-
 TIKTOK TOKEN STORAGE
-
 ============================================================
 
 def save_tiktok_tokens(
@@ -321,9 +284,7 @@ except Exception:
     return None
 
 ============================================================
-
 OAUTH STATE STORAGE
-
 ============================================================
 
 def save_oauth_state(
@@ -447,9 +408,7 @@ if (
 return True
 
 ============================================================
-
 TIKTOK OAUTH - LOGIN
-
 ============================================================
 
 @app.get(
@@ -507,9 +466,7 @@ return RedirectResponse(
 )
 
 ============================================================
-
 TIKTOK OAUTH - CALLBACK
-
 ============================================================
 
 @app.get(
@@ -606,9 +563,7 @@ except Exception as e:
     }
 
 ============================================================
-
 INTERCAMBIAR CODE POR TOKEN
-
 ============================================================
 
 def exchange_code_for_token(
@@ -713,9 +668,7 @@ except urllib.error.HTTPError as e:
     )
 
 ============================================================
-
 REFRESCAR TOKEN TIKTOK
-
 ============================================================
 
 def refresh_tiktok_token():
@@ -822,9 +775,7 @@ except urllib.error.HTTPError as e:
     )
 
 ============================================================
-
 OBTENER TOKEN ACTUAL
-
 ============================================================
 
 def get_tiktok_access_token():
@@ -889,9 +840,7 @@ if (
 return access_token
 
 ============================================================
-
 LLAMADA JSON GENÉRICA A TIKTOK
-
 ============================================================
 
 def tiktok_json_request(
@@ -964,9 +913,7 @@ except urllib.error.HTTPError as e:
     )
 
 ============================================================
-
 OBTENER INFORMACIÓN DEL USUARIO TIKTOK
-
 ============================================================
 
 def get_tiktok_user(
@@ -1031,9 +978,7 @@ except urllib.error.HTTPError as e:
     )
 
 ============================================================
-
 TEST TIKTOK
-
 ============================================================
 
 @app.get(
@@ -1066,9 +1011,7 @@ except Exception as e:
     }
 
 ============================================================
-
 CREATOR INFO
-
 ============================================================
 
 @app.get(
@@ -1097,19 +1040,12 @@ except Exception as e:
     }
 
 ============================================================
-
 PUBLICAR VIDEO A TIKTOK
-
-
 
 Usa PULL_FROM_URL.
 
-
-
 TikTok descarga directamente el MP4
-
 desde nuestro dominio verificado.
-
 ============================================================
 
 class TikTokPublishRequest(
@@ -1260,9 +1196,7 @@ except Exception as e:
     }
 
 ============================================================
-
 ESTADO DE PUBLICACIÓN TIKTOK
-
 ============================================================
 
 class TikTokStatusRequest(
@@ -1302,9 +1236,7 @@ except Exception as e:
     }
 
 ============================================================
-
 HOME
-
 ============================================================
 
 @app.get("/")
@@ -1325,9 +1257,7 @@ return {
 }
 
 ============================================================
-
 TEST
-
 ============================================================
 
 @app.get(
@@ -1343,9 +1273,7 @@ return {
 }
 
 ============================================================
-
 TEST FFMPEG
-
 ============================================================
 
 @app.get(
@@ -1384,9 +1312,7 @@ except Exception as e:
     }
 
 ============================================================
-
 DESCARGAR VIDEO DE TIKTOK
-
 ============================================================
 
 class VideoRequest(
@@ -1499,9 +1425,7 @@ except Exception as e:
     }
 
 ============================================================
-
 SERVIR VIDEOS
-
 ============================================================
 
 def get_video_path(
@@ -1773,9 +1697,7 @@ except Exception:
     )
 
 ============================================================
-
 MULTIPART PARA ELEVENLABS
-
 ============================================================
 
 def create_multipart_body(
@@ -1847,9 +1769,7 @@ return (
 )
 
 ============================================================
-
 ELEVENLABS FORCED ALIGNMENT
-
 ============================================================
 
 def get_forced_alignment(
@@ -1953,9 +1873,7 @@ except Exception as e:
     )
 
 ============================================================
-
 TIEMPOS SRT
-
 ============================================================
 
 def format_srt_time(
@@ -2001,9 +1919,7 @@ return (
 )
 
 ============================================================
-
 CREAR SUBTÍTULOS
-
 ============================================================
 
 def create_srt_from_alignment(
@@ -2180,9 +2096,7 @@ with open(
         )
 
 ============================================================
-
 DURACIÓN AUDIO
-
 ============================================================
 
 def get_audio_duration(
@@ -2222,9 +2136,7 @@ return float(
 )
 
 ============================================================
-
 DURACIÓN VIDEO
-
 ============================================================
 
 def get_video_duration(
@@ -2264,9 +2176,7 @@ return float(
 )
 
 ============================================================
-
 PROCESAMIENTO BACKGROUND
-
 ============================================================
 
 def process_video_background(
@@ -2539,9 +2449,7 @@ except Exception as e:
     )
 
 ============================================================
-
 PROCESS VIDEO
-
 ============================================================
 
 @app.post(
@@ -2706,9 +2614,7 @@ except Exception as e:
     }
 
 ============================================================
-
 STATUS VIDEO
-
 ============================================================
 
 @app.get(
@@ -2839,3 +2745,4 @@ raise HTTPException(
     status_code=404,
     detail="Job no encontrado"
 )
+
