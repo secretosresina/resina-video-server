@@ -2309,10 +2309,14 @@ def process_video_background(
         # duración máxima. Evita que Render mate el contenedor
         # por falta de memoria (OOM) y deja un error claro en
         # vez de un job colgado en "processing" para siempre.
+        #
+        # Solo se valida voice_duration: como el output siempre
+        # se recorta con "-t voice_duration" (y el video hace
+        # loop si es más corto), la duración FINAL del video
+        # generado siempre es igual a voice_duration, sin
+        # importar cuánto dure el video original de entrada.
         if (
             voice_duration
-            > MAX_VIDEO_DURATION_SECONDS
-            or video_duration
             > MAX_VIDEO_DURATION_SECONDS
         ):
 
@@ -2321,7 +2325,7 @@ def process_video_background(
             )
 
             state["error"] = (
-                "Video/audio supera "
+                "El audio/texto supera "
                 "la duración máxima "
                 "permitida de "
                 f"{MAX_VIDEO_DURATION_SECONDS}s "
