@@ -1736,6 +1736,13 @@ def get_video(
 
 
 # ============================================================
+# DESCARGA DIRECTA DEL MP4 FINAL
+#
+# Este endpoint se usa para Instagram/YouTube/otros servicios
+# que necesitan descargar el archivo como binario, no reproducirlo.
+# ============================================================
+
+# ============================================================
 # MULTIPART PARA ELEVENLABS
 # ============================================================
 
@@ -2340,6 +2347,7 @@ def process_video_background(
             "MarginV=25'"
             "[video]"
         )
+
 
         result = subprocess.run(
             [
