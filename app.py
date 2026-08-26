@@ -2487,7 +2487,7 @@ def process_video_background(
             ],
             capture_output=True,
             text=True,
-            timeout=300
+            timeout=500
         )
 
         if result.returncode != 0:
@@ -2578,7 +2578,7 @@ def process_video_background(
 
         state["error"] = (
             "FFmpeg superó "
-            "los 300 segundos"
+            "los 500 segundos"
         )
 
         save_job_state(
