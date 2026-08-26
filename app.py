@@ -47,6 +47,11 @@ BASE_URL = os.getenv(
 
 VIDEO_DIR = "/tmp/videos"
 
+# Límite de duración para evitar que FFmpeg se quede sin
+# memoria (512MB) en el plan gratuito de Render. Ajustar si
+# se sube de plan más adelante.
+MAX_VIDEO_DURATION_SECONDS = 40
+
 os.makedirs(
     VIDEO_DIR,
     exist_ok=True
@@ -2300,6 +2305,37 @@ def process_video_background(
             state
         )
 
+        # Cortamos aquí, antes de FFmpeg, si el job supera la
+        # duración máxima. Evita que Render mate el contenedor
+        # por falta de memoria (OOM) y deja un error claro en
+        # vez de un job colgado en "processing" para siempre.
+        if (
+            voice_duration
+            > MAX_VIDEO_DURATION_SECONDS
+            or video_duration
+            > MAX_VIDEO_DURATION_SECONDS
+        ):
+
+            state["status"] = (
+                "error"
+            )
+
+            state["error"] = (
+                "Video/audio supera "
+                "la duración máxima "
+                "permitida de "
+                f"{MAX_VIDEO_DURATION_SECONDS}s "
+                "(límite por memoria "
+                "del servidor)."
+            )
+
+            save_job_state(
+                job_id,
+                state
+            )
+
+            return
+
         subtitle_filter_path = (
             srt_path
             .replace(
@@ -2344,19 +2380,27 @@ def process_video_background(
             "[audio];"
 
             "[0:v]"
+            # Bajamos la resolución de trabajo antes de quemar
+            # subtítulos: menos píxeles = mucha menos memoria
+            # en decodificación, libass y codificación. 720 de
+            # ancho conserva buena calidad para Reels/Shorts.
+            "scale=720:-2,"
             "subtitles='"
             + subtitle_filter_path
             + "':"
             "force_style="
+            # Tamaños de fuente/outline/margen reducidos en la
+            # misma proporción (720/1080) que la escala de
+            # video, para que se vean igual que antes.
             "'FontName=Arial,"
-            "FontSize=18,"
+            "FontSize=12,"
             "PrimaryColour=&H00FFFFFF,"
             "OutlineColour=&H00000000,"
             "BorderStyle=1,"
-            "Outline=3,"
+            "Outline=2,"
             "Shadow=1,"
             "Alignment=2,"
-            "MarginV=25'"
+            "MarginV=17'"
             "[video]"
         )
 
