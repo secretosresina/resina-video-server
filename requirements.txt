@@ -1,5 +1,7 @@
 fastapi
-uvicorn[standard]
+uvicorn
 gunicorn
-yt-dlp
 python-multipart
+pydantic
+yt-dlp==2026.08.19
+curl-cffi==0.15.0
