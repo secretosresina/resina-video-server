@@ -2220,158 +2220,6 @@ def get_video_duration(
     )
 
 
-def inspect_output_video(
-    video_path
-):
-
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=format_name,duration,size",
-            "-show_entries",
-            "stream=index,codec_type,codec_name,pix_fmt,width,height,sample_rate,channels",
-            "-of",
-            "json",
-            video_path
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30
-    )
-
-    if result.returncode != 0:
-
-        raise Exception(
-            "ffprobe no pudo leer "
-            "el MP4 final:\n"
-            + result.stderr[-3000:]
-        )
-
-    data = json.loads(
-        result.stdout
-    )
-
-    streams = data.get(
-        "streams",
-        []
-    )
-
-    format_data = data.get(
-        "format",
-        {}
-    )
-
-    video_stream = next(
-        (
-            stream
-            for stream in streams
-            if stream.get("codec_type") == "video"
-        ),
-        None
-    )
-
-    audio_stream = next(
-        (
-            stream
-            for stream in streams
-            if stream.get("codec_type") == "audio"
-        ),
-        None
-    )
-
-    if not video_stream:
-
-        raise Exception(
-            "El MP4 final no contiene "
-            "un stream de video válido."
-        )
-
-    if video_stream.get(
-        "codec_name"
-    ) != "h264":
-
-        raise Exception(
-            "El MP4 final no usa H.264. "
-            f"Codec detectado: "
-            f"{video_stream.get('codec_name')}"
-        )
-
-    if video_stream.get(
-        "pix_fmt"
-    ) != "yuv420p":
-
-        raise Exception(
-            "El MP4 final no usa "
-            f"yuv420p. "
-            f"Pixel format: "
-            f"{video_stream.get('pix_fmt')}"
-        )
-
-    if not audio_stream:
-
-        raise Exception(
-            "El MP4 final no contiene "
-            "un stream de audio."
-        )
-
-    if audio_stream.get(
-        "codec_name"
-    ) != "aac":
-
-        raise Exception(
-            "El MP4 final no usa AAC. "
-            f"Codec detectado: "
-            f"{audio_stream.get('codec_name')}"
-        )
-
-    file_size = os.path.getsize(
-        video_path
-    )
-
-    if file_size <= 0:
-
-        raise Exception(
-            "El MP4 final está vacío."
-        )
-
-    return {
-        "file_size": file_size,
-        "format_name": format_data.get(
-            "format_name"
-        ),
-        "duration": float(
-            format_data.get(
-                "duration",
-                0
-            )
-        ),
-        "video_codec": video_stream.get(
-            "codec_name"
-        ),
-        "video_pix_fmt": video_stream.get(
-            "pix_fmt"
-        ),
-        "video_width": video_stream.get(
-            "width"
-        ),
-        "video_height": video_stream.get(
-            "height"
-        ),
-        "audio_codec": audio_stream.get(
-            "codec_name"
-        ),
-        "audio_sample_rate": audio_stream.get(
-            "sample_rate"
-        ),
-        "audio_channels": audio_stream.get(
-            "channels"
-        )
-    }
-
-
 # ============================================================
 # PROCESAMIENTO BACKGROUND
 # ============================================================
@@ -2477,7 +2325,6 @@ def process_video_background(
             "[audio];"
 
             "[0:v]"
-            "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
             "subtitles='"
             + subtitle_filter_path
             + "':"
@@ -2532,32 +2379,11 @@ def process_video_background(
                 "-crf",
                 "23",
 
-                "-pix_fmt",
-                "yuv420p",
-
-                "-profile:v",
-                "high",
-
-                "-level:v",
-                "4.0",
-
-                "-tag:v",
-                "avc1",
-
                 "-c:a",
                 "aac",
 
                 "-b:a",
                 "128k",
-
-                "-ar",
-                "48000",
-
-                "-ac",
-                "2",
-
-                "-map_metadata",
-                "-1",
 
                 "-t",
                 str(
@@ -2612,10 +2438,6 @@ def process_video_background(
 
             return
 
-        video_info = inspect_output_video(
-            output_path
-        )
-
         filename = os.path.basename(
             output_path
         )
@@ -2634,46 +2456,6 @@ def process_video_background(
         )
 
         state["alignment"] = True
-
-        state["file_size"] = (
-            video_info["file_size"]
-        )
-
-        state["format_name"] = (
-            video_info["format_name"]
-        )
-
-        state["output_duration"] = (
-            video_info["duration"]
-        )
-
-        state["video_codec"] = (
-            video_info["video_codec"]
-        )
-
-        state["video_pix_fmt"] = (
-            video_info["video_pix_fmt"]
-        )
-
-        state["video_width"] = (
-            video_info["video_width"]
-        )
-
-        state["video_height"] = (
-            video_info["video_height"]
-        )
-
-        state["audio_codec"] = (
-            video_info["audio_codec"]
-        )
-
-        state["audio_sample_rate"] = (
-            video_info["audio_sample_rate"]
-        )
-
-        state["audio_channels"] = (
-            video_info["audio_channels"]
-        )
 
         save_job_state(
             job_id,
