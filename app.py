@@ -2322,7 +2322,10 @@ def process_video_background(
         # con éxito. Así /status/{job_id} nunca ve un archivo
         # "processed.mp4" a medio escribir.
         temp_output_path = (
-            output_path + ".part"
+            output_path.replace(
+                "_processed.mp4",
+                "_processed.tmp.mp4"
+            )
         )
 
         filter_complex = (
