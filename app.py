@@ -186,6 +186,225 @@ def tiktok_verification_2():
 
     return TIKTOK_VERIFICATION_CONTENT_2
 
+# ============================================================
+# PÁGINAS LEGALES (Privacidad / Términos) — requeridas por
+# TikTok para el envío de la app a revisión.
+# ============================================================
+
+PRIVACY_POLICY_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Política de Privacidad - Resina Video Automation</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    max-width: 720px;
+    margin: 40px auto;
+    padding: 0 20px;
+    line-height: 1.6;
+    color: #222;
+  }
+  h1 { font-size: 1.6em; }
+  h2 { font-size: 1.2em; margin-top: 1.8em; }
+  .updated { color: #666; font-size: 0.9em; }
+</style>
+</head>
+<body>
+
+<h1>Política de Privacidad — Resina Video Automation</h1>
+<p class="updated">Última actualización: 27 de agosto de 2026</p>
+
+<p>
+Resina Video Automation ("la Aplicación") es una herramienta personal
+desarrollada y operada por Enrique (en adelante, "el Desarrollador")
+para automatizar la publicación de contenido de video en sus propias
+cuentas de redes sociales (Instagram, YouTube y TikTok). La Aplicación
+no está diseñada para uso público ni multiusuario: es una herramienta
+de uso personal e interno.
+</p>
+
+<h2>1. Qué información se procesa</h2>
+<p>
+La Aplicación procesa temporalmente los siguientes datos, únicamente
+con el fin de generar y publicar el contenido de video:
+</p>
+<ul>
+  <li>Archivos de video e imagen subidos manualmente por el Desarrollador.</li>
+  <li>Texto de guiones utilizado para generar narración por voz (a través de servicios de terceros de generación de voz).</li>
+  <li>Tokens de acceso (OAuth) de las cuentas de redes sociales autorizadas por el Desarrollador para publicar contenido.</li>
+</ul>
+
+<h2>2. Cómo se usa la información</h2>
+<p>
+Los archivos de video, audio y texto se usan exclusivamente para
+generar el video final (agregando narración, subtítulos y música de
+fondo) y publicarlo automáticamente en las cuentas de redes sociales
+que el propio Desarrollador ha autorizado. Los tokens de acceso de
+OAuth se usan únicamente para autenticar esas publicaciones ante cada
+plataforma (Instagram, YouTube, TikTok).
+</p>
+
+<h2>3. Almacenamiento y retención</h2>
+<p>
+Los archivos de video procesados se almacenan de forma temporal en el
+servidor mientras se completa la publicación, y se eliminan
+automáticamente al reiniciarse el servicio. No se conserva un
+historial permanente de los videos generados. Los tokens de acceso se
+almacenan de forma privada en el servidor del Desarrollador y no se
+comparten con terceros.
+</p>
+
+<h2>4. Compartición de datos con terceros</h2>
+<p>
+La Aplicación no vende, alquila ni comparte información personal con
+terceros con fines comerciales o publicitarios. Los únicos terceros
+involucrados son:
+</p>
+<ul>
+  <li>Las plataformas de redes sociales (Meta/Instagram, YouTube/Google, TikTok), a las que se publica el contenido final mediante APIs oficiales y autorización OAuth explícita del propio Desarrollador.</li>
+  <li>Servicios de generación de voz por IA, utilizados únicamente para crear la narración del video.</li>
+</ul>
+
+<h2>5. Seguridad</h2>
+<p>
+Se toman medidas razonables para proteger los tokens de acceso y los
+archivos procesados, incluyendo el uso de conexiones HTTPS y
+almacenamiento restringido al propio servidor del Desarrollador.
+</p>
+
+<h2>6. Uso exclusivamente personal</h2>
+<p>
+Esta Aplicación es de uso exclusivamente personal del Desarrollador.
+No recopila datos de terceros ni de usuarios externos, ya que no
+tiene un flujo de registro ni de uso público.
+</p>
+
+<h2>7. Contacto</h2>
+<p>
+Para cualquier pregunta sobre esta Política de Privacidad, puedes
+contactar a: <strong>luis.carmax@gmail.com</strong>
+</p>
+
+</body>
+</html>
+"""
+
+TERMS_OF_SERVICE_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Términos de Servicio - Resina Video Automation</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    max-width: 720px;
+    margin: 40px auto;
+    padding: 0 20px;
+    line-height: 1.6;
+    color: #222;
+  }
+  h1 { font-size: 1.6em; }
+  h2 { font-size: 1.2em; margin-top: 1.8em; }
+  .updated { color: #666; font-size: 0.9em; }
+</style>
+</head>
+<body>
+
+<h1>Términos de Servicio — Resina Video Automation</h1>
+<p class="updated">Última actualización: 27 de agosto de 2026</p>
+
+<p>
+Resina Video Automation ("la Aplicación") es una herramienta personal
+de automatización, desarrollada y operada por Enrique (en adelante,
+"el Desarrollador") con el único propósito de generar y publicar
+contenido de video en las propias cuentas de redes sociales del
+Desarrollador (Instagram, YouTube y TikTok). Al utilizar la
+Aplicación, el Desarrollador acepta los siguientes términos.
+</p>
+
+<h2>1. Naturaleza del servicio</h2>
+<p>
+La Aplicación es una herramienta de uso personal e interno, no un
+servicio comercial ni multiusuario. No está disponible para registro
+público ni se ofrece a terceros como producto o servicio.
+</p>
+
+<h2>2. Uso de APIs de terceros</h2>
+<p>
+La Aplicación se conecta a las APIs oficiales de Meta (Instagram),
+Google (YouTube) y TikTok mediante autorización OAuth explícita,
+otorgada directamente por el Desarrollador desde sus propias cuentas.
+La Aplicación cumple con los lineamientos de uso de cada una de estas
+plataformas.
+</p>
+
+<h2>3. Responsabilidad sobre el contenido</h2>
+<p>
+El Desarrollador es el único responsable del contenido generado y
+publicado a través de la Aplicación. La Aplicación no publica
+contenido sin la intervención inicial del Desarrollador (subida de
+material y ejecución del proceso).
+</p>
+
+<h2>4. Disponibilidad</h2>
+<p>
+La Aplicación se ofrece "tal cual", sin garantías de disponibilidad
+continua. Al ser una herramienta personal en desarrollo, puede sufrir
+interrupciones, cambios o discontinuación en cualquier momento, sin
+previo aviso.
+</p>
+
+<h2>5. Limitación de responsabilidad</h2>
+<p>
+El Desarrollador no se hace responsable de daños indirectos derivados
+del uso de la Aplicación, incluyendo posibles interrupciones en la
+publicación de contenido o errores en el procesamiento de video.
+</p>
+
+<h2>6. Cambios en los términos</h2>
+<p>
+Estos términos pueden actualizarse en cualquier momento. La versión
+vigente siempre estará disponible en esta misma página.
+</p>
+
+<h2>7. Contacto</h2>
+<p>
+Para cualquier pregunta sobre estos Términos de Servicio, puedes
+contactar a: <strong>luis.carmax@gmail.com</strong>
+</p>
+
+</body>
+</html>
+"""
+
+
+@app.get(
+    "/privacy-policy",
+    response_class=Response
+)
+def privacy_policy():
+
+    return Response(
+        content=PRIVACY_POLICY_HTML,
+        media_type="text/html"
+    )
+
+
+@app.get(
+    "/terms-of-service",
+    response_class=Response
+)
+def terms_of_service():
+
+    return Response(
+        content=TERMS_OF_SERVICE_HTML,
+        media_type="text/html"
+    )
+
+
 
 # ============================================================
 # ESTADO DE JOBS
