@@ -2316,6 +2316,15 @@ def process_video_background(
             )
         )
 
+        # Escribimos primero a un archivo temporal en el
+        # mismo directorio (mismo filesystem) para poder
+        # renombrarlo de forma atómica cuando FFmpeg termine
+        # con éxito. Así /status/{job_id} nunca ve un archivo
+        # "processed.mp4" a medio escribir.
+        temp_output_path = (
+            output_path + ".part"
+        )
+
         filter_complex = (
             "[1:a]"
             "volume=1.0"
@@ -2401,7 +2410,7 @@ def process_video_background(
                 "-movflags",
                 "+faststart",
 
-                output_path
+                temp_output_path
             ],
             capture_output=True,
             text=True,
@@ -2409,6 +2418,14 @@ def process_video_background(
         )
 
         if result.returncode != 0:
+
+            if os.path.isfile(
+                temp_output_path
+            ):
+
+                os.remove(
+                    temp_output_path
+                )
 
             state["status"] = (
                 "error"
@@ -2427,7 +2444,7 @@ def process_video_background(
             return
 
         if not os.path.isfile(
-            output_path
+            temp_output_path
         ):
 
             state["status"] = (
@@ -2445,6 +2462,16 @@ def process_video_background(
             )
 
             return
+
+        # Solo ahora que FFmpeg terminó con éxito hacemos
+        # visible el archivo final, con un rename atómico.
+        # Antes de esta línea, output_path NO existe, así que
+        # /status/{job_id} no puede reportar "completed" con
+        # un video a medio codificar.
+        os.replace(
+            temp_output_path,
+            output_path
+        )
 
         filename = os.path.basename(
             output_path
