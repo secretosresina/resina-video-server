@@ -165,6 +165,28 @@ def tiktok_verification():
     return TIKTOK_VERIFICATION_CONTENT
 
 
+# Verificación adicional pedida específicamente por
+# Content Posting API (URL Ownership Verification), separada
+# de la verificación de Login Kit de arriba.
+TIKTOK_VERIFICATION_FILE_2 = (
+    "tiktokcPvfTWI2ljdwpsw3hvrDMqITfEOXnMlr.txt"
+)
+
+TIKTOK_VERIFICATION_CONTENT_2 = (
+    "tiktok-developers-site-verification="
+    "cPvfTWI2ljdwpsw3hvrDMqITfEOXnMlr"
+)
+
+
+@app.get(
+    f"/{TIKTOK_VERIFICATION_FILE_2}",
+    response_class=PlainTextResponse
+)
+def tiktok_verification_2():
+
+    return TIKTOK_VERIFICATION_CONTENT_2
+
+
 # ============================================================
 # ESTADO DE JOBS
 # ============================================================
@@ -2465,7 +2487,7 @@ def process_video_background(
             ],
             capture_output=True,
             text=True,
-            timeout=500
+            timeout=300
         )
 
         if result.returncode != 0:
@@ -2556,7 +2578,7 @@ def process_video_background(
 
         state["error"] = (
             "FFmpeg superó "
-            "los 500 segundos"
+            "los 300 segundos"
         )
 
         save_job_state(
